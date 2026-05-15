@@ -89,7 +89,7 @@
               <ul class="load-opt-list">
                 <li>✅ Files stay in project folder</li>
                 <li>✅ Persistent across sessions</li>
-                <li>⚙️ Run <code>..manifest.bat/node indexer.js</code></li>
+                <li>⚙️ Run <code>.bat</code> or <code>node indexer.js</code></li>
               </ul>
               <button class="btn btn-cyan" id="preload-btn">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
@@ -129,6 +129,21 @@
         <div id="type-filter-section" class="type-filter-section hidden">
           <span class="type-filter-label">Filter by type:</span>
           <div id="type-filter-chips" class="type-filter-chips"></div>
+        </div>
+
+        <!-- Indexing Strategy (Global) -->
+        <div id="indexing-strategy-section" class="indexing-strategy-section hidden" style="margin-top: 15px; border-top: 1px solid var(--border); padding-top: 15px;">
+          <span class="type-filter-label">Indexing Strategy: </span>
+          <div class="search-opts" style="margin-top: 10px; justify-content: flex-start;">
+            <label class="opt-chip">
+              <input type="radio" name="index-mode" value="standard" hidden />
+              <span class="chip-content">Standard (.bat method)</span>
+            </label>
+            <label class="opt-chip">
+              <input type="radio" name="index-mode" value="turbo" checked hidden />
+              <span class="chip-content">Turbo (Node.js method)</span>
+            </label>
+          </div>
         </div>
       </div>
     </section>

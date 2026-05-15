@@ -32,6 +32,7 @@ const CacheManager = {
 let databaseTree = null, selectedPath = [], cancelSearch = false, searchRunning = false;
 let documentIndex = new Map(), isIndexed = false, selectedTypes = new Set(), searchMode = 'AND';
 let currentMethod = null; // 'Browse Folder' or 'Pre-loaded Database'
+let indexingMode = 'turbo'; // 'standard' or 'turbo'
 
 // ── DOM (all optional — safe if element is commented out)
 const $ = id => document.getElementById(id);
@@ -200,6 +201,17 @@ async function onDatabaseLoaded(methodLabel) {
       <span class="db-info-method">via ${methodLabel}</span>`;
   }
 
+  // Capture the indexing strategy from the global UI
+  indexingMode = document.querySelector('input[name="index-mode"]:checked')?.value || 'turbo';
+  console.log(`Loading database with strategy: ${indexingMode}`);
+
+  // Show the global strategy section only if indexing is enabled
+  if (ENABLE_INDEXING) {
+    document.getElementById('indexing-strategy-section')?.classList.remove('hidden');
+  } else {
+    document.getElementById('indexing-strategy-section')?.classList.add('hidden');
+  }
+
   // Automation: Search will trigger scoped indexing automatically if needed.
   isIndexed = false;
   setStatus('loaded', `file${tf !== 1 ? 's' : ''} loaded`);
@@ -224,6 +236,7 @@ function resetAppUI() {
   typeFilterSection?.classList.add('hidden');
   scopeSummary?.classList.add('hidden');
   document.getElementById('index-section')?.classList.add('hidden');
+  document.getElementById('indexing-strategy-section')?.classList.add('hidden');
   documentIndex.clear();
   isIndexed = false;
   currentMethod = null;
@@ -243,16 +256,15 @@ async function tryLoadPrecomputedIndex(scopeKeys) {
       }
     } catch (e) { console.log('Metadata not found, falling back to serial discovery.'); }
 
-    let results = [];
+    let loadedChunks = 0;
     indexSection?.classList.remove('hidden');
     if (indexFill) indexFill.style.width = '0%';
     if (indexText) indexText.textContent = 'Initializing index fetch...';
 
     if (totalChunks > 0) {
-      // ── Parallel Loading (Faster) ──
+      // ── Parallel Loading (Stream-Merge for Memory Safety) ──
       if (statusLabel) statusLabel.textContent = `Fetching index...`;
 
-      let loadedChunks = 0;
       const fetchPromises = [];
       for (let i = 0; i < totalChunks; i++) {
         const fileName = i === 0 ? 'search-index.json' : `search-index-${i}.json`;
@@ -267,15 +279,23 @@ async function tryLoadPrecomputedIndex(scopeKeys) {
               data = await res.json();
               await CacheManager.set(url, data);
             }
+            
+            // Memory Optimization: Merge immediately and discard unneeded entries
+            Object.entries(data).forEach(([k, v]) => {
+              if (!scopeKeys || scopeKeys.has(k)) {
+                documentIndex.set(k, v);
+              }
+            });
+            data = null; // Explicitly signal for Garbage Collection
+
             loadedChunks++;
             const pct = Math.round((loadedChunks / totalChunks) * 100);
-            if (indexText) indexText.textContent = `Fetching index chunks: ${loadedChunks}/${totalChunks} (${pct}%)`;
+            if (indexText) indexText.textContent = `Loading: ${loadedChunks}/${totalChunks} (${pct}%)`;
             if (indexFill) indexFill.style.width = `${pct}%`;
-            return data;
           })()
         );
       }
-      results = await Promise.all(fetchPromises);
+      await Promise.all(fetchPromises);
     } else {
       // ── Serial Loading (Discovery Fallback) ──
       let chunkIdx = 0;
@@ -289,28 +309,26 @@ async function tryLoadPrecomputedIndex(scopeKeys) {
           data = await res.json();
           await CacheManager.set(url, data);
         }
-        results.push(data);
-        chunkIdx++;
-        if (indexText) indexText.textContent = `Discovered and loading chunk ${chunkIdx}...`;
-        if (chunkIdx > 1000) break;
-      }
-    }
-
-    if (results.length > 0) {
-      if (statusLabel) statusLabel.textContent = `Merging index for scope...`;
-      if (indexText) indexText.textContent = `Processing data...`;
-      documentIndex = new Map();
-      results.forEach(data => {
+        
+        // Memory Optimization: Merge immediately
         Object.entries(data).forEach(([k, v]) => {
-          // Scope Filtering: only keep in memory what's needed
           if (!scopeKeys || scopeKeys.has(k)) {
             documentIndex.set(k, v);
           }
         });
-      });
+        data = null;
+
+        chunkIdx++;
+        if (indexText) indexText.textContent = `Discovering chunk ${chunkIdx}...`;
+        chunkIdx++;
+        if (chunkIdx > 1000) break;
+      }
+    }
+
+    if (documentIndex.size > 0) {
       isIndexed = true;
     } else {
-      throw new Error('No index files found in database folder.');
+      throw new Error('No index data found for this scope.');
     }
   } catch (e) { 
     console.log('Chunked index load failed:', e.message); 
@@ -322,7 +340,8 @@ async function tryLoadPrecomputedIndex(scopeKeys) {
 }
 
 async function runIndexingForScope(filesToIndex, scopeKeys) {
-  if (currentMethod === 'Pre-loaded Database') {
+  // TURBO MODE (Pre-computed chunks via Node.js indexer)
+  if (indexingMode === 'turbo') {
     setStatus('loading', 'Loading index…');
     await tryLoadPrecomputedIndex(scopeKeys);
     
@@ -338,7 +357,9 @@ async function runIndexingForScope(filesToIndex, scopeKeys) {
       if (indexStatus) indexStatus.textContent = 'Ready';
       setStatus('loaded', `file${filesToIndex.length !== 1 ? 's' : ''} loaded`);
     }
-  } else {
+  } 
+  // STANDARD MODE (On-the-fly indexing via browser/.bat manifest)
+  else {
     setStatus('indexing', 'Indexing…');
     await buildIndex(filesToIndex);
   }
@@ -361,15 +382,32 @@ async function buildIndex(allFiles) {
   isIndexed = false; documentIndex.clear();
   indexSection?.classList.remove('hidden');
   if (indexFill) indexFill.style.width = '0%';
-  if (indexStatus) indexStatus.textContent = '';
-  for (let i = 0; i < allFiles.length; i++) {
-    const f = allFiles[i];
-    if (indexText) indexText.textContent = `Indexing ${i + 1} of ${allFiles.length}…`;
+  if (indexStatus) indexStatus.textContent = 'Processing...';
+
+  // Parallel Concurrency: 10 files at a time (Safe for mobile, fast for loading)
+  const CONCURRENCY = 10;
+  let completed = 0;
+
+  async function processFile(f) {
+    try {
+      const sections = await extractSections(f);
+      documentIndex.set(fileKey(f), { fileInfo: f, sections });
+    } catch (e) {
+      console.warn('Index skip:', f.name, e.message);
+    }
+    completed++;
+    const pct = Math.round((completed / allFiles.length) * 100);
+    if (indexText) indexText.textContent = `Indexing: ${completed}/${allFiles.length} (${pct}%)`;
     if (indexDetail) indexDetail.textContent = `${getFileIcon(getExt(f.name))} ${f.name}`;
-    if (indexFill) indexFill.style.width = `${Math.round((i / allFiles.length) * 100)}%`;
-    try { documentIndex.set(fileKey(f), { fileInfo: f, sections: await extractSections(f) }); }
-    catch (e) { console.warn('Index skip:', f.name, e.message); }
+    if (indexFill) indexFill.style.width = `${pct}%`;
   }
+
+  // Process in parallel batches
+  for (let i = 0; i < allFiles.length; i += CONCURRENCY) {
+    const batch = allFiles.slice(i, i + CONCURRENCY).map(f => processFile(f));
+    await Promise.all(batch);
+  }
+
   if (indexFill) indexFill.style.width = '100%';
   if (indexText) indexText.textContent = `✅ ${documentIndex.size} files indexed`;
   if (indexStatus) indexStatus.textContent = 'Ready';
@@ -377,7 +415,11 @@ async function buildIndex(allFiles) {
   isIndexed = true;
   setStatus('loaded', `file${allFiles.length !== 1 ? 's' : ''} loaded`);
 }
-const fileKey = f => f.serverPath || f.fileObj?.webkitRelativePath || f.name;
+const fileKey = f => {
+  if (f.serverPath) return f.serverPath;
+  if (f.fileObj) return `local://${f.fileObj.webkitRelativePath || f.fileObj.name}-${f.fileObj.size}-${f.fileObj.lastModified}`;
+  return f.name;
+};
 
 // ── File Type Filter
 function renderTypeFilters() {
@@ -451,6 +493,18 @@ searchInput?.addEventListener('keydown', e => { if (e.key === 'Enter') startSear
 cancelBtn?.addEventListener('click', () => { cancelSearch = true; });
 clearBtn?.addEventListener('click', () => { resultsSect?.classList.add('hidden'); if (resultsCont) resultsCont.innerHTML = ''; });
 
+// Listen for global indexing mode changes
+document.querySelectorAll('input[name="index-mode"]').forEach(radio => {
+  radio.addEventListener('change', () => {
+    indexingMode = radio.value;
+    console.log(`Switched indexing strategy to: ${indexingMode}`);
+    // Clear the index so the next search re-processes with the new strategy
+    isIndexed = false;
+    documentIndex.clear();
+    document.getElementById('index-section')?.classList.add('hidden');
+  });
+});
+
 function parseQuery(raw) {
   if (raw.includes(' AND ')) return { terms: raw.split(' AND ').map(t => t.trim()), mode: 'AND' };
   if (raw.includes(' OR ')) return { terms: raw.split(' OR ').map(t => t.trim()), mode: 'OR' };
@@ -480,7 +534,7 @@ async function startSearch() {
   if (findBtn) findBtn.disabled = true;
 
   // AUTO-INDEX CHECK: If scope not indexed, do it now
-  if (!isScopeIndexed(scopeKeys)) {
+  if (ENABLE_INDEXING && !isScopeIndexed(scopeKeys)) {
     await runIndexingForScope(scopeFiles, scopeKeys);
   }
 
@@ -490,6 +544,12 @@ async function startSearch() {
   setStatus('searching', 'Searching…');
 
   const results = [];
+  let totalOccurrences = 0;
+
+  // Initialize UI for streaming
+  resultsSect?.classList.remove('hidden');
+  if (resultsCont) resultsCont.innerHTML = '';
+  if (resultsCount) resultsCount.textContent = 'Searching...';
 
   if (isIndexed) {
     let processed = 0, total = 0;
@@ -502,27 +562,30 @@ async function startSearch() {
       if (progressText) progressText.textContent = `Searching ${processed} of ${total}…`;
       if (progressDetail) progressDetail.textContent = fileInfo.name;
       if (progressFill) progressFill.style.width = `${Math.round((processed / total) * 100)}%`;
+      
       const groupedMatches = new Map();
       for (const sec of sections) {
         const occs = findAllOccurrences(sec.text, terms, mode, caseSensitive, wholeWord);
         if (occs.length > 0) {
           if (!groupedMatches.has(sec.location)) {
             groupedMatches.set(sec.location, {
-              location: sec.location,
-              text: sec.text,
-              type: sec.type || 'text',
-              data: sec.data || null,
+              location: sec.location, text: sec.text,
+              type: sec.type || 'text', data: sec.data || null,
               occurrences: occs
             });
           } else {
-            // Already have this location, just add unique occurrences
             const existing = groupedMatches.get(sec.location).occurrences;
             occs.forEach(o => { if (!existing.some(ex => ex.index === o.index)) existing.push(o); });
           }
         }
       }
       const matches = Array.from(groupedMatches.values());
-      if (matches.length) results.push({ fileInfo, matches });
+      if (matches.length) {
+        const res = { fileInfo, matches };
+        results.push(res);
+        totalOccurrences += matches.reduce((s, m) => s + (m.occurrences ? m.occurrences.length : 1), 0);
+        appendResult(res, terms, results.length - 1, totalOccurrences);
+      }
       await tick();
     }
   } else {
@@ -533,6 +596,7 @@ async function startSearch() {
       if (progressText) progressText.textContent = `Searching ${i + 1} of ${scopeFiles.length}…`;
       if (progressDetail) progressDetail.textContent = f.name;
       if (progressFill) progressFill.style.width = `${Math.round((i / scopeFiles.length) * 100)}%`;
+      
       try { 
         const secs = await extractSections(f); 
         const groupedMatches = new Map(); 
@@ -541,10 +605,8 @@ async function startSearch() {
           if (occs.length > 0) {
             if (!groupedMatches.has(sec.location)) {
               groupedMatches.set(sec.location, {
-                location: sec.location,
-                text: sec.text,
-                type: sec.type || 'text',
-                data: sec.data || null,
+                location: sec.location, text: sec.text,
+                type: sec.type || 'text', data: sec.data || null,
                 occurrences: occs
               });
             } else {
@@ -554,20 +616,38 @@ async function startSearch() {
           }
         }
         const matches = Array.from(groupedMatches.values());
-        if (matches.length) results.push({ fileInfo: f, matches }); 
+        if (matches.length) {
+          const res = { fileInfo: f, matches };
+          results.push(res);
+          totalOccurrences += matches.reduce((s, m) => s + (m.occurrences ? m.occurrences.length : 1), 0);
+          appendResult(res, terms, results.length - 1, totalOccurrences);
+        } 
       }
       catch (e) { console.warn('Skipped:', f.name); }
     }
   }
 
   if (progressFill) progressFill.style.width = '100%';
-  setTimeout(() => {
-    progressSect?.classList.add('hidden');
-    showResults(results, terms, scopeFiles.length, cancelSearch);
-    searchRunning = false;
-    if (findBtn) findBtn.disabled = false;
-    setStatus('loaded', `files loaded`);
-  }, 300);
+  finalizeResults(results, scopeFiles.length, cancelSearch);
+  searchRunning = false;
+  if (findBtn) findBtn.disabled = false;
+  setStatus('loaded', `search complete`);
+}
+
+function appendResult(res, terms, index, totalOcc) {
+  if (resultsCount) resultsCount.textContent = `${index + 1} file${index !== 0 ? 's' : ''} · ${totalOcc} occurrence${totalOcc !== 1 ? 's' : ''}`;
+  resultsCont?.appendChild(buildCard(res, terms, index));
+}
+
+function finalizeResults(results, totalScanned, cancelled) {
+  progressSect?.classList.add('hidden');
+  if (cancelled && resultsCont) {
+    resultsCont.insertAdjacentHTML('afterbegin', `<div class="warn-banner">⚠️ Search cancelled — partial results (${totalScanned} files scanned).</div>`);
+  }
+  if (results.length === 0) {
+    if (resultsCont) resultsCont.innerHTML = `<div class="empty-state"><div class="empty-icon">🔍</div><h3>No matches found</h3><p>Try different keywords or broaden scope.</p></div>`;
+    if (resultsCount) resultsCount.textContent = 'No matches';
+  }
 }
 
 function matchTerms(text, terms, mode, cs, ww) {
@@ -623,13 +703,21 @@ const tick = () => new Promise(r => setTimeout(r, 0));
 
 // ── Text extraction
 async function extractSections(f) {
+  const key = `file-index-v1:${fileKey(f)}`;
+  const cached = await CacheManager.get(key);
+  if (cached) return cached;
+
   const ext = getExt(f.name);
-  if (ext === 'pdf') return extractPDF(f);
-  if (ext === 'docx') return extractDOCX(f);
-  if (ext === 'pptx' || ext === 'odp') return extractPPTX(f, ext);
-  if (['xlsx', 'xls', 'ods'].includes(ext)) return extractXLSX(f);
-  if (ext === 'odt') return extractODT(f);
-  return extractPlainText(f, ext);
+  let res;
+  if (ext === 'pdf') res = await extractPDF(f);
+  else if (ext === 'docx') res = await extractDOCX(f);
+  else if (ext === 'pptx' || ext === 'odp') res = await extractPPTX(f, ext);
+  else if (['xlsx', 'xls', 'ods'].includes(ext)) res = await extractXLSX(f);
+  else if (ext === 'odt') res = await extractODT(f);
+  else res = await extractPlainText(f, ext);
+
+  if (res) await CacheManager.set(key, res);
+  return res;
 }
 async function getBuffer(f) { if (f.fileObj) return f.fileObj.arrayBuffer(); const r = await fetch(f.serverPath); if (!r.ok) throw new Error('HTTP ' + r.status); return r.arrayBuffer(); }
 async function getText(f) { if (f.fileObj) return f.fileObj.text(); const r = await fetch(f.serverPath); return r.text(); }
@@ -731,16 +819,7 @@ function chunkText(text, size, pfx, byLines = false) { const c = []; if (byLines
 function extractSnippet(text, query, cs, radius, forceIndex = -1) { const cmp = cs ? text : text.toLowerCase(), q = cs ? query : query.toLowerCase(); const idx = forceIndex !== -1 ? forceIndex : cmp.indexOf(q); if (idx === -1) return text.slice(0, radius * 2) + '…'; const s = Math.max(0, idx - radius), e = Math.min(text.length, idx + query.length + radius); return (s > 0 ? '…' : '') + text.slice(s, e) + (e < text.length ? '…' : ''); }
 function escapeRegex(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
-// ── Results
-function showResults(results, terms, total, cancelled) {
-  resultsSect?.classList.remove('hidden');
-  if (resultsCont) resultsCont.innerHTML = '';
-  const mc = results.length, th = results.reduce((s, r) => s + r.matches.reduce((ms, m) => ms + (m.occurrences ? m.occurrences.length : 1), 0), 0);
-  if (resultsCount) resultsCount.textContent = mc === 0 ? 'No matches' : `${mc} file${mc !== 1 ? 's' : ''} · ${th} occurrence${th !== 1 ? 's' : ''}`;
-  if (cancelled && resultsCont) resultsCont.insertAdjacentHTML('beforeend', `<div class="warn-banner">⚠️ Search cancelled — partial results (${total} files scanned).</div>`);
-  if (mc === 0) { if (resultsCont) resultsCont.innerHTML += `<div class="empty-state"><div class="empty-icon">🔍</div><h3>No matches found</h3><p>Try different keywords or broaden scope.</p></div>`; return; }
-  results.forEach((r, i) => resultsCont?.appendChild(buildCard(r, terms, i)));
-}
+// Removed old showResults as it is now incremental via appendResult and finalizeResults
 function buildCard({ fileInfo, matches }, terms, index) {
   const ext = getExt(fileInfo.name);
   const card = document.createElement('div'); card.className = 'result-card'; card.style.animationDelay = `${index * 50}ms`;
