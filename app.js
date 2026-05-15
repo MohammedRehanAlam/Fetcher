@@ -7,12 +7,31 @@ const ENABLE_INDEXING = true;
 if (typeof pdfjsLib !== 'undefined')
   pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
+// ── Cache Manager
+const CacheManager = {
+  CACHE_NAME: 'fetcher-index-cache-v1',
+  async get(url) {
+    try {
+      const key = url.split('?')[0]; // Strip timestamp for cache key
+      const cache = await caches.open(this.CACHE_NAME);
+      const res = await cache.match(key);
+      return res ? await res.json() : null;
+    } catch { return null; }
+  },
+  async set(url, data) {
+    try {
+      const key = url.split('?')[0]; // Strip timestamp for cache key
+      const cache = await caches.open(this.CACHE_NAME);
+      await cache.put(key, new Response(JSON.stringify(data)));
+    } catch (e) { console.warn('Cache set failed:', e); }
+  },
+  async clear() { try { await caches.delete(this.CACHE_NAME); } catch {} }
+};
+
 // ── State
 let databaseTree = null, selectedPath = [], cancelSearch = false, searchRunning = false;
 let documentIndex = new Map(), isIndexed = false, selectedTypes = new Set(), searchMode = 'AND';
-let lastSearchResults = [], resultsDisplayedCount = 0;
-const RESULTS_PER_PAGE = 10;
-const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+let currentMethod = null; // 'Browse Folder' or 'Pre-loaded Database'
 
 // ── DOM (all optional — safe if element is commented out)
 const $ = id => document.getElementById(id);
@@ -64,12 +83,6 @@ dbCollapsedView?.addEventListener('click', () => {
   stepLoad?.classList.remove('collapsed');
   dbCollapsedView?.classList.add('hidden');
 });
-
-// ── Mobile Optimization: Disable heavy animations
-if (isMobile) {
-  document.querySelectorAll('.orb').forEach(orb => orb.style.display = 'none');
-  document.querySelector('.bg-orbs').style.display = 'none';
-}
 
 // ── Search History - storing a total of 20 items (only last 5 displayed) ──
 const getHistory = () => { try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'); } catch { return []; } };
@@ -123,17 +136,13 @@ searchInput?.addEventListener('focus', renderHistory);
 document.addEventListener('click', e => { if (!e.target.closest('#search-input-wrap')) histDD?.classList.add('hidden'); });
 
 // ── Method 1: Browse Folder
-browseBtn?.addEventListener('click', () => { 
-  if (isMobile) {
-    if (!confirm('Folder browsing is resource-intensive and may not work perfectly on all mobile devices. For the best experience, use a PC or the Pre-loaded Database. Continue?')) return;
-  }
-  if (folderInput) { folderInput.value = ''; folderInput.click(); } 
-});
+browseBtn?.addEventListener('click', () => { if (folderInput) { folderInput.value = ''; folderInput.click(); } });
 folderInput?.addEventListener('change', async () => {
   resetAppUI();
   const files = Array.from(folderInput.files).filter(f => SUPPORTED_EXT.includes(getExt(f.name)));
   if (!files.length) { alert('No supported documents found.'); return; }
   databaseTree = buildTreeFromFiles(files); selectedPath = [];
+  currentMethod = 'Browse Folder';
   await onDatabaseLoaded('Browse Folder');
 });
 
@@ -160,6 +169,7 @@ preloadBtn?.addEventListener('click', async () => {
     const paths = await res.json();
     if (!Array.isArray(paths) || !paths.length) throw new Error();
     databaseTree = buildTreeFromPaths(paths); selectedPath = [];
+    currentMethod = 'Pre-loaded Database';
     await onDatabaseLoaded('Pre-loaded Database');
   } catch { manifestError?.classList.remove('hidden'); }
   if (preloadBtn) { preloadBtn.textContent = 'Use Database Folder'; preloadBtn.disabled = false; }
@@ -190,21 +200,9 @@ async function onDatabaseLoaded(methodLabel) {
       <span class="db-info-method">via ${methodLabel}</span>`;
   }
 
-  if (methodLabel === 'Pre-loaded Database') {
-    setStatus('loading', 'Loading pre-computed index...');
-    await tryLoadPrecomputedIndex();
-  } else {
-    isIndexed = false; // Force manual index for local folder browsing
-  }
-
-  if (isIndexed) {
-    // setStatus('loaded', `file${tf !== 1 ? 's' : ''} loaded (Index Ready)`);
-      setStatus('loaded', `file${tf !== 1 ? 's' : ''} loaded`);
-  } else {
-    setStatus('loaded', `file${tf !== 1 ? 's' : ''} loaded`);
-    const trigger = document.getElementById('index-trigger-section');
-    if (trigger) trigger.classList.remove('hidden');
-  }
+  // Automation: Search will trigger scoped indexing automatically if needed.
+  isIndexed = false;
+  setStatus('loaded', `file${tf !== 1 ? 's' : ''} loaded`);
 
   // ONLY COLLAPSE UI AFTER SUCCESSFUL LOAD
   if (dbToggleBtn) dbToggleBtn.classList.remove('hidden');
@@ -226,14 +224,16 @@ function resetAppUI() {
   typeFilterSection?.classList.add('hidden');
   scopeSummary?.classList.add('hidden');
   document.getElementById('index-section')?.classList.add('hidden');
-  document.getElementById('index-trigger-section')?.classList.add('hidden');
   documentIndex.clear();
   isIndexed = false;
+  currentMethod = null;
   setStatus('none', 'No database loaded');
 }
 
-async function tryLoadPrecomputedIndex() {
+async function tryLoadPrecomputedIndex(scopeKeys) {
+  isIndexed = false; documentIndex.clear();
   try {
+    // 1. Try to get metadata for parallel loading
     let totalChunks = 0;
     try {
       const infoRes = await fetch('database/search-index-info.json?t=' + Date.now());
@@ -243,59 +243,118 @@ async function tryLoadPrecomputedIndex() {
       }
     } catch (e) { console.log('Metadata not found, falling back to serial discovery.'); }
 
-    documentIndex = new Map();
+    let results = [];
+    indexSection?.classList.remove('hidden');
+    if (indexFill) indexFill.style.width = '0%';
+    if (indexText) indexText.textContent = 'Initializing index fetch...';
 
     if (totalChunks > 0) {
+      // ── Parallel Loading (Faster) ──
       if (statusLabel) statusLabel.textContent = `Fetching index...`;
 
-      // ── Sequential Loading (Mobile Friendly) ──
+      let loadedChunks = 0;
+      const fetchPromises = [];
       for (let i = 0; i < totalChunks; i++) {
         const fileName = i === 0 ? 'search-index.json' : `search-index-${i}.json`;
-        if (statusLabel) statusLabel.textContent = `Fetching index ${i + 1}/${totalChunks}...`;
+        const url = `database/${fileName}?t=` + Date.now();
         
-        const res = await fetch(`database/${fileName}?t=` + Date.now());
-        if (!res.ok) throw new Error(`Failed to load ${fileName}`);
-        const data = await res.json();
-        
-        // Merge immediately to avoid keeping all chunk objects in a temporary array
-        Object.entries(data).forEach(([k, v]) => documentIndex.set(k, v));
-        
-        // Yield to main thread every few chunks
-        if (i % 2 === 0) await tick();
+        fetchPromises.push(
+          (async () => {
+            let data = await CacheManager.get(url);
+            if (!data) {
+              const res = await fetch(url);
+              if (!res.ok) throw new Error(`Failed to load ${fileName}`);
+              data = await res.json();
+              await CacheManager.set(url, data);
+            }
+            loadedChunks++;
+            const pct = Math.round((loadedChunks / totalChunks) * 100);
+            if (indexText) indexText.textContent = `Fetching index chunks: ${loadedChunks}/${totalChunks} (${pct}%)`;
+            if (indexFill) indexFill.style.width = `${pct}%`;
+            return data;
+          })()
+        );
       }
-      isIndexed = true;
+      results = await Promise.all(fetchPromises);
     } else {
       // ── Serial Loading (Discovery Fallback) ──
       let chunkIdx = 0;
       while (true) {
         const fileName = chunkIdx === 0 ? 'search-index.json' : `search-index-${chunkIdx}.json`;
-        if (statusLabel) statusLabel.textContent = `Fetching index ${chunkIdx + 1}...`;
-        const res = await fetch(`database/${fileName}?t=` + Date.now());
-        if (!res.ok) break;
-        const data = await res.json();
-        Object.entries(data).forEach(([k, v]) => documentIndex.set(k, v));
+        const url = `database/${fileName}?t=` + Date.now();
+        let data = await CacheManager.get(url);
+        if (!data) {
+          const res = await fetch(url);
+          if (!res.ok) break;
+          data = await res.json();
+          await CacheManager.set(url, data);
+        }
+        results.push(data);
         chunkIdx++;
-        await tick();
+        if (indexText) indexText.textContent = `Discovered and loading chunk ${chunkIdx}...`;
         if (chunkIdx > 1000) break;
       }
-      if (documentIndex.size > 0) isIndexed = true;
+    }
+
+    if (results.length > 0) {
+      if (statusLabel) statusLabel.textContent = `Merging index for scope...`;
+      if (indexText) indexText.textContent = `Processing data...`;
+      documentIndex = new Map();
+      results.forEach(data => {
+        Object.entries(data).forEach(([k, v]) => {
+          // Scope Filtering: only keep in memory what's needed
+          if (!scopeKeys || scopeKeys.has(k)) {
+            documentIndex.set(k, v);
+          }
+        });
+      });
+      isIndexed = true;
+    } else {
+      throw new Error('No index files found in database folder.');
     }
   } catch (e) { 
-    console.log('Index load failed:', e.message); 
+    console.log('Chunked index load failed:', e.message); 
     isIndexed = false;
+    if (indexText) indexText.textContent = `❌ Load failed: ${e.message}`;
+    if (indexStatus) indexStatus.textContent = 'Error';
+    if (indexFill) indexFill.style.backgroundColor = '#ef4444';
   }
 }
 
-document.getElementById('start-index-btn')?.addEventListener('click', async () => {
-  if (!databaseTree) return;
-  const targetNode = selectedPath.length === 0 ? databaseTree : getNodeAtPath(selectedPath);
-  if (!targetNode) return;
-  const filesToIndex = getAllFiles(targetNode);
+async function runIndexingForScope(filesToIndex, scopeKeys) {
+  if (currentMethod === 'Pre-loaded Database') {
+    setStatus('loading', 'Loading index…');
+    await tryLoadPrecomputedIndex(scopeKeys);
+    
+    // Fallback: if precomputed index (Node.js) isn't found, build it on the fly
+    // This allows the .bat method (manifest only) to still work perfectly.
+    if (!isIndexed) {
+      console.log('Pre-computed index not found, falling back to client-side indexing.');
+      setStatus('indexing', 'Indexing…');
+      await buildIndex(filesToIndex);
+    } else {
+      if (indexFill) indexFill.style.width = '100%';
+      if (indexText) indexText.textContent = `✅ ${documentIndex.size} files loaded`;
+      if (indexStatus) indexStatus.textContent = 'Ready';
+      setStatus('loaded', `file${filesToIndex.length !== 1 ? 's' : ''} loaded`);
+    }
+  } else {
+    setStatus('indexing', 'Indexing…');
+    await buildIndex(filesToIndex);
+  }
   
-  document.getElementById('index-trigger-section')?.classList.add('hidden');
-  setStatus('indexing', 'Indexing…');
-  await buildIndex(filesToIndex);
-});
+  renderTypeFilters();
+}
+
+function isScopeIndexed(scopeKeys) {
+  if (!isIndexed || documentIndex.size === 0) return false;
+  // If we have any of the keys missing, it's not fully indexed for this scope
+  for (const k of scopeKeys) {
+    if (!documentIndex.has(k)) return false;
+  }
+  return true;
+}
+
 
 // ── Pre-indexing
 async function buildIndex(allFiles) {
@@ -316,9 +375,7 @@ async function buildIndex(allFiles) {
   if (indexStatus) indexStatus.textContent = 'Ready';
   if (indexDetail) indexDetail.textContent = '';
   isIndexed = true;
-  // setStatus('loaded', `${allFiles.length} file${allFiles.length !== 1 ? 's' : ''} loaded`);
   setStatus('loaded', `file${allFiles.length !== 1 ? 's' : ''} loaded`);
-  document.getElementById('index-trigger-section')?.classList.remove('hidden');
 }
 const fileKey = f => f.serverPath || f.fileObj?.webkitRelativePath || f.name;
 
@@ -386,10 +443,6 @@ function updateScopeSummary() {
   const tot = countFiles(node), ps = selectedPath.length === 0 ? databaseTree.name : `${databaseTree.name} / ${selectedPath.join(' / ')}`;
   scopeSummary.classList.remove('hidden');
   scopeSummary.innerHTML = `Searching in: <strong>${ps}</strong> &mdash; <strong>${tot}</strong> file${tot !== 1 ? 's' : ''}`;
-  
-  // Update the Deep Index button text too
-  const targetName = document.getElementById('index-target-name');
-  if (targetName) targetName.textContent = selectedPath.length === 0 ? databaseTree.name : selectedPath[selectedPath.length - 1];
 }
 
 // ── Search
@@ -425,6 +478,12 @@ async function startSearch() {
 
   cancelSearch = false; searchRunning = true;
   if (findBtn) findBtn.disabled = true;
+
+  // AUTO-INDEX CHECK: If scope not indexed, do it now
+  if (!isScopeIndexed(scopeKeys)) {
+    await runIndexingForScope(scopeFiles, scopeKeys);
+  }
+
   progressSect?.classList.remove('hidden');
   resultsSect?.classList.add('hidden');
   if (resultsCont) resultsCont.innerHTML = '';
@@ -504,8 +563,6 @@ async function startSearch() {
   if (progressFill) progressFill.style.width = '100%';
   setTimeout(() => {
     progressSect?.classList.add('hidden');
-    lastSearchResults = results;
-    resultsDisplayedCount = 0;
     showResults(results, terms, scopeFiles.length, cancelSearch);
     searchRunning = false;
     if (findBtn) findBtn.disabled = false;
@@ -630,6 +687,10 @@ async function extractPDF(f) {
     if (isTable) s.push({ location: `Page ${p}`, text: structuredRows.map(r => r.join(" \t ")).join("\n"), type: 'table', data: structuredRows });
     else s.push({ location: `Page ${p}`, text: structuredRows.map(r => r.join(" ")).join("\n") });
   }
+  
+  // Free PDF memory
+  try { pdf.destroy(); } catch(e) {}
+  
   return s;
 }
 async function extractDOCX(f) { const r = await mammoth.extractRawText({ arrayBuffer: await getBuffer(f) }); return chunkText(r.value, 2000, 'Section'); }
@@ -674,47 +735,11 @@ function escapeRegex(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 function showResults(results, terms, total, cancelled) {
   resultsSect?.classList.remove('hidden');
   if (resultsCont) resultsCont.innerHTML = '';
-  
-  const mc = results.length;
-  const th = results.reduce((s, r) => s + r.matches.reduce((ms, m) => ms + (m.occurrences ? m.occurrences.length : 1), 0), 0);
-  
+  const mc = results.length, th = results.reduce((s, r) => s + r.matches.reduce((ms, m) => ms + (m.occurrences ? m.occurrences.length : 1), 0), 0);
   if (resultsCount) resultsCount.textContent = mc === 0 ? 'No matches' : `${mc} file${mc !== 1 ? 's' : ''} · ${th} occurrence${th !== 1 ? 's' : ''}`;
   if (cancelled && resultsCont) resultsCont.insertAdjacentHTML('beforeend', `<div class="warn-banner">⚠️ Search cancelled — partial results (${total} files scanned).</div>`);
-  
-  if (mc === 0) {
-    if (resultsCont) resultsCont.innerHTML += `<div class="empty-state"><div class="empty-icon">🔍</div><h3>No matches found</h3><p>Try different keywords or broaden scope.</p></div>`;
-    return;
-  }
-  
-  renderMoreResults(terms);
-}
-
-function renderMoreResults(terms) {
-  if (!resultsCont) return;
-  
-  const nextBatch = lastSearchResults.slice(resultsDisplayedCount, resultsDisplayedCount + RESULTS_PER_PAGE);
-  nextBatch.forEach((r, i) => {
-    resultsCont.appendChild(buildCard(r, terms, resultsDisplayedCount + i));
-  });
-  
-  resultsDisplayedCount += nextBatch.length;
-  
-  // Remove existing "Load More" button if any
-  const existingBtn = document.getElementById('load-more-btn');
-  if (existingBtn) existingBtn.remove();
-  
-  if (resultsDisplayedCount < lastSearchResults.length) {
-    const btnWrap = document.createElement('div');
-    btnWrap.style.padding = '20px';
-    btnWrap.style.textAlign = 'center';
-    btnWrap.innerHTML = `<button id="load-more-btn" class="btn btn-cyan">Show More Results (${lastSearchResults.length - resultsDisplayedCount} left)</button>`;
-    resultsCont.appendChild(btnWrap);
-    
-    document.getElementById('load-more-btn')?.addEventListener('click', () => {
-      btnWrap.remove();
-      renderMoreResults(terms);
-    });
-  }
+  if (mc === 0) { if (resultsCont) resultsCont.innerHTML += `<div class="empty-state"><div class="empty-icon">🔍</div><h3>No matches found</h3><p>Try different keywords or broaden scope.</p></div>`; return; }
+  results.forEach((r, i) => resultsCont?.appendChild(buildCard(r, terms, i)));
 }
 function buildCard({ fileInfo, matches }, terms, index) {
   const ext = getExt(fileInfo.name);

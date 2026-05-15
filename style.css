@@ -84,6 +84,16 @@ body {
   transition: border-color 0.3s, box-shadow 0.3s;
   backdrop-filter: blur(12px);
 }
+
+@media (max-width: 450px) {
+  .header-inner { padding: 12px 16px; }
+  .logo-tag { display: none; }
+  .logo-icon { width: 36px; height: 36px; border-radius: 8px; }
+  .logo-name { font-size: 18px; }
+  .main { padding: 20px 14px; gap: 15px; }
+  .card { padding: 18px; }
+  .step-badge { left: 16px; }
+}
 .card:hover { border-color: rgba(79,70,229,0.3); box-shadow: var(--shadow-glow); }
 .card.disabled-card { opacity: 0.45; pointer-events: none; transition: opacity 0.4s; }
 .card.enabled { opacity: 1; pointer-events: all; }
@@ -602,16 +612,6 @@ body {
   100% { opacity: 1; transform: scale(1.1); }
 }
 
-.btn-index {
-  animation: pulse-button 2s infinite ease-in-out;
-}
-
-@keyframes pulse-button {
-  0%, 100% { transform: scale(1); box-shadow: 0 4px 12px rgba(99,102,241,0.2); }
-  50% { transform: scale(1.02); box-shadow: 0 4px 20px rgba(99,102,241,0.4); }
-}
-
-
 /* ── Tabular Data UI ── */
 .match-table-wrapper {
   margin-top: 10px;
@@ -707,47 +707,3 @@ body {
   border-top: 1px solid var(--border);
   text-align: center;
 }
-
-/* ── Index Trigger Section ── */
-.index-trigger-section {
-  margin-top: 20px;
-  padding: 24px;
-  background: rgba(79,70,229,0.05);
-  border: 1px dashed rgba(79,70,229,0.3);
-  border-radius: var(--radius-sm);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 14px;
-  text-align: center;
-  animation: slide-in 0.4s ease forwards;
-}
-.btn-index {
-  background: linear-gradient(135deg, var(--primary), var(--primary-end));
-  color: white;
-  padding: 14px 36px;
-  font-size: 16px;
-  font-weight: 800;
-  box-shadow: 0 0 30px rgba(79,70,229,0.3);
-  border: none;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  transition: all 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-}
-.btn-index:hover {
-  transform: scale(1.04) translateY(-2px);
-  box-shadow: 0 10px 40px rgba(79,70,229,0.5);
-}
-.btn-index:active {
-  transform: scale(0.98);
-}
-.index-help {
-  font-size: 13px;
-  color: var(--text-muted);
-  max-width: 440px;
-  line-height: 1.6;
-}
-

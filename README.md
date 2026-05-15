@@ -1,55 +1,42 @@
 # Fetcher — Intelligent Document Search Engine
 
-A powerful, 100% local document search engine designed for high-volume information retrieval (perfect for SIR electoral data processing).
+A powerful, 100% local document search engine optimized for mobile performance and high-volume information retrieval.
 
 ## 🚀 Key Features
 
 - **Universal Format Support:** Search through **PDF, DOCX, PPTX, XLSX, TXT, CSV, RTF, ODT, ODP, ODS**.
-- **Instant Search:** Automated pre-indexing caches document text in memory for lightning-fast results.
-- **Smart Logic:** Supports **AND / OR** operators (e.g., `Rehan AND Hyderabad`).
-- **Cascading Dropdowns:** Narrow your search scope to specific nested sub-folders.
+- **Automated Scoped Indexing:** Indexing is triggered automatically when you search. It smartly only indexes the folder you have selected, preventing memory crashes on mobile devices.
+- **Persistent Caching:** High-performance index chunks are stored in your browser's local cache. Subsequent loads are instantaneous.
 - **Privacy First:** 100% local processing. No data ever leaves your device.
-- **Search History:** Quickly rerun your last 20 searches.
-- **Type Filtering:** Toggle specific file formats on or off.
+- **Premium UI:** Responsive dark-mode interface designed for both Desktop and Mobile.
 
 ## 🛠️ How to Use
 
-### Method 1: Browse Folder (Most Private)
-1. Open `index.html` in a modern browser (Chrome or Edge recommended).
-2. Click **"Choose Database Folder"** and select any folder on your computer.
-3. The app will automatically build a folder tree and index your files.
+### Method 1: Browse Folder (No Setup)
+1. Open `index.html` and click **"Select Folder"**.
+2. Pick any folder. The app will build a temporary tree and index files automatically when you search.
 
-### Method 2: Pre-loaded Database (Persistent)
-1. Place your documents inside the `database/` folder.
-2. Run `generate-manifest.bat` once to index the file list.
+### Method 2: Pre-loaded Database (Standard)
+1. Place documents inside the `database/` folder.
+2. Run `generate-manifest.bat` once to create the file list.
 3. Open `index.html` and click **"Use Database Folder"**.
+4. The app will index your files automatically during your first search.
 
-### Method 3: High Performance (Pre-computed Index)
-1. Best for the fastest experience with 4000+ files.
-2. Ensure you have **Node.js** installed.
-3. Run `npm install` and then `node indexer.js`.
-4. This creates a `database/search-index.json` file.
-5. The website will load this file automatically for **instant** searching.
+### Method 3: High Performance (Recommended for 1000+ files)
+1. Follow Method 2, but also run `node indexer.js` (requires Node.js).
+2. This creates pre-computed index chunks in the `database/` folder.
+3. Searching will now be **near-instant**, as the browser doesn't have to build the index itself.
 
-## 📁 Recommended Structure for SIR Work
-```
-database/
-├── State_Name/
-│   ├── District_A/
-│   │   ├── Constituency_1/
-│   │   │   └── Part_001.pdf
-│   │   └── Constituency_2/
-│   │       └── Part_001.pdf
-│   └── District_B/
-│       └── Summary.xlsx
-└── Global_List.csv
-```
+## 📱 Mobile Optimization
+Fetcher is specifically tuned for mobile browsers:
+- **Lazy Loading:** Data is only loaded into memory when required by the user's search scope.
+- **Memory Management:** Automatically clears large buffers and handles PDF cleanup to prevent crashes.
+- **Responsive Layout:** All cards and search tools adjust for small screens.
 
 ## ⚠️ Requirements
-- **Browser:** Google Chrome or Microsoft Edge (versions 86+).
-- **Setup:** For the "Pre-loaded" mode, Windows is required to run the `.bat` file.
-- **Setup:** For the "High Performance" mode, **Node.js** is required.
-- **Setup:** For the "Browse Folder" mode, **No Setup** is required.
+- **Browser:** Chrome, Edge, or Safari (iOS).
+- **Setup:** For Method 2, Windows is required to run the `.bat` file.
+- **Setup:** For Method 3, **Node.js** is required.
 
 ---
 *Fetcher © 2026 — Built for high-speed local document intelligence.*
