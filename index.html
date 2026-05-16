@@ -48,7 +48,7 @@
   <main class="main">
 
     <!-- Step 1: Load Database -->
-    <section class="card" id="step-load">
+    <!-- <section class="card" id="step-load">
       <div class="step-badge">01</div>
       <button id="db-toggle-btn" class="card-toggle-btn hidden" aria-label="Expand or collapse section">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 15 12 9 18 15"></polyline></svg>
@@ -59,9 +59,9 @@
           <h2 class="card-title">Load Database</h2>
           <p class="card-desc">Supports <span class="format-tag">PDF</span> <span class="format-tag">DOCX</span> <span class="format-tag">PPTX</span> <span class="format-tag">XLSX</span> <span class="format-tag">TXT</span> <span class="format-tag">CSV</span> <span class="format-tag">RTF</span> <span class="format-tag">ODT</span> <span class="format-tag">ODP</span> <span class="format-tag">ODS</span> <span class="format-tag">SRT</span> <span class="format-tag">VTT</span> and more.</p>
 
-          <div class="load-options">
+          <div class="load-options"> -->
             <!-- Option A: Browse Folder -->
-            <div class="load-opt">
+            <!-- <div class="load-opt">
               <div class="load-opt-icon">📂</div>
               <h3 class="load-opt-title">Browse Folder</h3>
               <p class="load-opt-desc">Pick any folder from your computer. Works in all browsers.</p>
@@ -79,10 +79,10 @@
               </button>
             </div>
 
-            <div class="load-divider"><span>OR</span></div>
+            <div class="load-divider"><span>OR</span></div> -->
 
             <!-- Option B: Pre-loaded Database -->
-            <div class="load-opt">
+            <!-- <div class="load-opt">
               <div class="load-opt-icon">🗄️</div>
               <h3 class="load-opt-title">Pre-loaded Database</h3>
               <p class="load-opt-desc">Use files already placed in the <code>database/</code> project folder.</p>
@@ -99,11 +99,11 @@
                 ⚠️ <code>database/manifest.json</code> not found.<br/>
                 Run <strong>generate-manifest.bat</strong> from the project folder, then try again.
               </div>
-            </div>
-          </div> <!-- end load-options -->
-        </div> <!-- end db-full-view -->
+            </div> -->
+          <!-- </div>end load-options -->
+        <!-- </div>end db-full-view -->
 
-        <div id="db-collapsed-view" class="db-collapsed-view hidden">
+        <!-- <div id="db-collapsed-view" class="db-collapsed-view hidden">
           <div class="db-collapsed-content">
             <span id="db-collapsed-icon" class="db-collapsed-icon"></span>
             <div class="db-collapsed-text">
@@ -113,26 +113,26 @@
           </div>
         </div>
 
-        <div id="db-info" class="db-info hidden"></div>
+        <div id="db-info" class="db-info hidden"></div> -->
 
         <!-- Indexing progress (automated during search) -->
-        <div id="index-section" class="index-section hidden">
+        <!-- <div id="index-section" class="index-section hidden">
           <div class="index-header">
             <span id="index-text">Indexing documents…</span>
             <span id="index-status" class="index-status"></span>
           </div>
           <div class="progress-track"><div class="progress-fill" id="index-fill"></div></div>
           <div id="index-detail" class="progress-detail"></div>
-        </div>
+        </div> -->
 
         <!-- File Type Filter -->
-        <div id="type-filter-section" class="type-filter-section hidden">
+        <!-- <div id="type-filter-section" class="type-filter-section hidden">
           <span class="type-filter-label">Filter by type:</span>
           <div id="type-filter-chips" class="type-filter-chips"></div>
-        </div>
+        </div> -->
 
         <!-- Indexing Strategy (Global) -->
-        <div id="indexing-strategy-section" class="indexing-strategy-section hidden" style="margin-top: 15px; border-top: 1px solid var(--border); padding-top: 15px;">
+        <!-- <div id="indexing-strategy-section" class="indexing-strategy-section hidden" style="margin-top: 15px; border-top: 1px solid var(--border); padding-top: 15px;">
           <span class="type-filter-label">Indexing Strategy: </span>
           <div class="search-opts" style="margin-top: 10px; justify-content: flex-start;">
             <label class="opt-chip">
@@ -146,11 +146,11 @@
           </div>
         </div>
       </div>
-    </section>
+    </section> -->
 
     <!-- Step 2: Select Scope -->
     <section class="card disabled-card" id="step-scope">
-      <div class="step-badge">02</div>
+      <!-- <div class="step-badge">02</div> -->
       <div class="card-body">
         <h2 class="card-title">Select Scope</h2>
         <p class="card-desc">Narrow your search by selecting specific folders. Sub-folder selectors appear automatically.</p>
@@ -163,16 +163,16 @@
 
     <!-- Step 3: Search -->
     <section class="card disabled-card" id="step-search">
-      <div class="step-badge">03</div>
+      <!-- <div class="step-badge">03</div> -->
       <div class="card-body">
         <h2 class="card-title">Search</h2>
-        <p class="card-desc">Supports <strong>AND</strong> / <strong>OR</strong> logic. e.g. <code>Rehan AND Hyderabad</code> or <code>Rehan OR Hyderabad</code>.</p>
+        <p class="card-desc">Supports <strong>AND</strong> / <strong>OR</strong> logic. e.g. <code>Developer AND Mohammed Rehan</code> or <code>Rehan Alam OR Hyderabad</code>.</p>
 
         <!-- Search bar + history -->
         <div class="search-row">
           <div class="search-input-wrap" id="search-input-wrap">
             <svg class="search-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
-            <input type="text" id="search-input" class="search-input" placeholder="e.g. Rehan Alam, Rehan AND/OR Hyderabad, ID, Address..." autocomplete="off" />
+            <input type="text" id="search-input" class="search-input" placeholder="e.g. Mohammed Rehan Alam, ID No', Address.." autocomplete="off" />
             <div id="history-dropdown" class="history-dropdown hidden"></div>
           </div>
           <button class="btn btn-find" id="find-btn">
@@ -226,7 +226,32 @@
   </main>
 
   <footer class="footer">
-    <p>Fetcher &copy; 2026 &mdash; All processing is done locally. No data leaves your device.</p>
+    <!-- Responsive Info Bar -->
+    <section id="info-bar" class="card credit-card hidden" style="padding: 16px; border: 1px solid var(--border); background: rgba(255,255,255,0.02); display: flex; flex-direction: column; align-items: center; text-align: center; gap: 8px; width: 100%; max-width: 600px; margin: 0 auto 10px auto;">
+      <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap; justify-content: center;">
+        <span style="font-weight: 800; color: #fff; font-size: 16px; letter-spacing: -0.01em;">Syed Omer Shafi</span>
+        <span style="height: 14px; width: 2px; background: var(--border); opacity: 0.8;"></span>
+        <!-- | -->
+        <span style="color: var(--cyan); font-weight: 700; font-size: 14px; letter-spacing: 0.03em;">Social Worker</span>
+      </div>
+      <div style="font-size: 12px; color: var(--text-muted); font-style: italic; opacity: 0.8; max-width: 400px;">
+        Of The People, For The People, From The People
+      </div>
+      <div style="font-size: 11px; color: var(--text-dim); align-items: center; justify-content: center; gap: 6px; margin-top: 4px;">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" style="transform: translateY(2px);"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg>
+        Masjid Muhammadia Uppal Hyderabad, 500039
+      </div>
+      <!-- <div style="font-size: 10px; color: var(--text-dim); align-items: center; justify-content: center; gap: 6px; margin-top: 3px;">
+        Developer: Mohammed Rehan Alam
+      </div> -->
+    </section>
+
+    <p style="align-items: center; justify-content: center; gap: 8px;">
+      <span id="info-toggle-btn" style="cursor: pointer; opacity: 0.5; transition: opacity 0.2s; display: inline-flex; align-items: center;" title="Know More">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" style="transform: translateY(4px);"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+      </span>&nbsp;
+      Fetcher &copy; 2026 &mdash; All processing is done locally. No data leaves your device.
+    </p>
   </footer>
 
   <!-- Libraries -->

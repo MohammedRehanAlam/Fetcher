@@ -1,6 +1,7 @@
 /* FETCHER — app.js | UI elements use ?. so commenting them out never breaks functionality */
 const SUPPORTED_EXT = ['pdf', 'docx', 'pptx', 'xlsx', 'xls', 'txt', 'csv', 'rtf', 'odt', 'odp', 'ods', 'srt', 'vtt'];
 const HISTORY_KEY = 'fetcher_history';
+const AUTO_LOAD_DB = true; // Set to true to automatically load the database on startup
 const SNIPPET_RADIUS = 100;
 const ENABLE_INDEXING = true;
 
@@ -160,7 +161,7 @@ function buildTreeFromFiles(files) {
 }
 
 // ── Method 2: Pre-loaded
-preloadBtn?.addEventListener('click', async () => {
+async function loadPreloadedDatabase(isAuto = false) {
   resetAppUI();
   manifestError?.classList.add('hidden');
   if (preloadBtn) { preloadBtn.textContent = 'Loading...'; preloadBtn.disabled = true; }
@@ -172,9 +173,13 @@ preloadBtn?.addEventListener('click', async () => {
     databaseTree = buildTreeFromPaths(paths); selectedPath = [];
     currentMethod = 'Pre-loaded Database';
     await onDatabaseLoaded('Pre-loaded Database');
-  } catch { manifestError?.classList.remove('hidden'); }
+  } catch { 
+    if (!isAuto) manifestError?.classList.remove('hidden');
+    else console.warn('Auto-load: database/manifest.json not found or empty.');
+  }
   if (preloadBtn) { preloadBtn.textContent = 'Use Database Folder'; preloadBtn.disabled = false; }
-});
+}
+preloadBtn?.addEventListener('click', () => loadPreloadedDatabase(false));
 
 function buildTreeFromPaths(paths) {
   const root = { name: 'database', children: [], files: [] };
@@ -340,8 +345,8 @@ async function tryLoadPrecomputedIndex(scopeKeys) {
 }
 
 async function runIndexingForScope(filesToIndex, scopeKeys) {
-  // TURBO MODE (Pre-computed chunks via Node.js indexer)
-  if (indexingMode === 'turbo') {
+  // TURBO MODE: only applies to Pre-loaded Database method
+  if (indexingMode === 'turbo' && currentMethod === 'Pre-loaded Database') {
     setStatus('loading', 'Loading index…');
     await tryLoadPrecomputedIndex(scopeKeys);
     
@@ -899,7 +904,7 @@ function buildCard({ fileInfo, matches }, terms, index) {
       const snippets = m.occurrences.map(occ => extractSnippet(m.text, occ.term, false, SNIPPET_RADIUS, occ.index));
       contentHtml = snippets.map(s => `<div class="match-snippet">${highlightAll(s, terms)}</div>`).join('');
     }
-    it.innerHTML = `<div class="match-page-badge">${escapeHtml(m.location)}</div><div style="flex:1;min-width:0">${contentHtml}</div>`;
+    it.innerHTML = `<div class="match-page-badge">${escapeHtml(m.location)}</div><div class="match-content">${contentHtml}</div>`;
     md.appendChild(it);
   });
   card.appendChild(md);
@@ -935,3 +940,14 @@ function getFileColor(ext) { if (['pdf'].includes(ext)) return 'rgba(239,68,68,0
 function getFileBorder(ext) { if (['pdf'].includes(ext)) return 'rgba(239,68,68,0.3)'; if (['docx', 'doc', 'odt'].includes(ext)) return 'rgba(59,130,246,0.3)'; if (['pptx', 'odp'].includes(ext)) return 'rgba(245,158,11,0.3)'; if (['xlsx', 'xls', 'ods'].includes(ext)) return 'rgba(16,185,129,0.3)'; if (['csv'].includes(ext)) return 'rgba(6,182,212,0.3)'; return 'rgba(148,163,184,0.25)'; }
 function escapeHtml(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
 function setStatus(state, text) { if (statusDot) statusDot.className = `status-dot ${state}`; if (statusLabel) statusLabel.textContent = text; }
+
+// ── Startup Auto-load ──
+if (AUTO_LOAD_DB) {
+  // Use a small delay to ensure all DOM listeners are ready
+  setTimeout(() => loadPreloadedDatabase(true), 100);
+}
+
+// ── Footer Info Toggle ──
+$('info-toggle-btn')?.addEventListener('click', () => {
+  $('info-bar')?.classList.toggle('hidden');
+});

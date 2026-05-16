@@ -1,6 +1,6 @@
 @echo off
 echo ============================================
-echo  Fetcher — Manifest Generator
+echo  Fetcher - Manifest Generator
 echo  Scans ALL supported document types
 echo ============================================
 echo.
