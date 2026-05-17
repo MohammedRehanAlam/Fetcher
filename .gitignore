@@ -22,7 +22,7 @@ yarn-debug.log*
 yarn-error.log*
 
 # Firebase
-.firebase/
+.firebase/ 
 
 # Windows thumbnail caches
 Thumbs.db
