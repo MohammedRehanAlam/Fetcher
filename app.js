@@ -34,6 +34,7 @@ let databaseTree = null, selectedPath = [], cancelSearch = false, searchRunning 
 let documentIndex = new Map(), isIndexed = false, selectedTypes = new Set(), searchMode = 'AND';
 let currentMethod = null; // 'Browse Folder' or 'Pre-loaded Database'
 let indexingMode = 'turbo'; // 'standard' or 'turbo'
+let lastSelectedPath = null; // Track path to smartly clear memory
 
 // ── DOM (all optional — safe if element is commented out)
 const $ = id => document.getElementById(id);
@@ -245,11 +246,12 @@ function resetAppUI() {
   documentIndex.clear();
   isIndexed = false;
   currentMethod = null;
+  lastSelectedPath = null;
   setStatus('none', 'No database loaded');
 }
 
 async function tryLoadPrecomputedIndex(scopeKeys) {
-  isIndexed = false; documentIndex.clear();
+  isIndexed = false;
   try {
     // 1. Try to get metadata for parallel loading
     let totalChunks = 0;
@@ -287,7 +289,7 @@ async function tryLoadPrecomputedIndex(scopeKeys) {
             
             // Memory Optimization: Merge immediately and discard unneeded entries
             Object.entries(data).forEach(([k, v]) => {
-              if (!scopeKeys || scopeKeys.has(k)) {
+              if ((!scopeKeys || scopeKeys.has(k)) && !documentIndex.has(k)) {
                 documentIndex.set(k, v);
               }
             });
@@ -318,7 +320,7 @@ async function tryLoadPrecomputedIndex(scopeKeys) {
         
         // Memory Optimization: Merge immediately
         Object.entries(data).forEach(([k, v]) => {
-          if (!scopeKeys || scopeKeys.has(k)) {
+          if ((!scopeKeys || scopeKeys.has(k)) && !documentIndex.has(k)) {
             documentIndex.set(k, v);
           }
         });
@@ -328,6 +330,16 @@ async function tryLoadPrecomputedIndex(scopeKeys) {
         if (indexText) indexText.textContent = `Discovering chunk ${chunkIdx}...`;
         chunkIdx++;
         if (chunkIdx > 1000) break;
+      }
+    }
+
+    // Guarantee that ALL scopeKeys are marked as indexed to prevent infinite re-indexing loops
+    // if the precomputed chunks are outdated and missing some files.
+    if (scopeKeys) {
+      for (const k of scopeKeys) {
+        if (!documentIndex.has(k)) {
+          documentIndex.set(k, { fileInfo: { name: k.split('/').pop(), serverPath: k }, sections: [] });
+        }
       }
     }
 
@@ -527,6 +539,16 @@ function parseQuery(raw) {
   return { terms: [raw], mode: searchMode };
 }
 
+function isSameBranch(path1, path2) {
+  if (!path1 || !path2) return true; 
+  if (path1.length === 0 || path2.length === 0) return true;
+  const minLen = Math.min(path1.length, path2.length);
+  for (let i = 0; i < minLen; i++) {
+    if (path1[i] !== path2[i]) return false; 
+  }
+  return true;
+}
+
 async function startSearch() {
   const raw = searchInput?.value.trim();
   if (!raw) { searchInput?.focus(); return; }
@@ -548,6 +570,14 @@ async function startSearch() {
 
   cancelSearch = false; searchRunning = true;
   if (findBtn) findBtn.disabled = true;
+
+  // Branch tracking to clear memory if switching completely (e.g. sibling folders)
+  if (lastSelectedPath !== null && !isSameBranch(lastSelectedPath, selectedPath)) {
+    console.log('Switched to a different branch. Clearing memory to save RAM.');
+    documentIndex.clear();
+    isIndexed = false;
+  }
+  lastSelectedPath = [...selectedPath];
 
   // AUTO-INDEX CHECK: If scope not indexed, do it now
   if (ENABLE_INDEXING && !isScopeIndexed(scopeKeys)) {
