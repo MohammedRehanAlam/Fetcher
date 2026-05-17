@@ -268,7 +268,7 @@ async function tryLoadPrecomputedIndex(scopeKeys) {
 
     if (totalChunks > 0) {
       // ── Parallel Loading (Stream-Merge for Memory Safety) ──
-      if (statusLabel) statusLabel.textContent = `Fetching index...`;
+      if (statusLabel) statusLabel.textContent = `Loading index`;
 
       const fetchPromises = [];
       for (let i = 0; i < totalChunks; i++) {
@@ -297,6 +297,7 @@ async function tryLoadPrecomputedIndex(scopeKeys) {
             const pct = Math.round((loadedChunks / totalChunks) * 100);
             if (indexText) indexText.textContent = `Loading: ${loadedChunks}/${totalChunks} (${pct}%)`;
             if (indexFill) indexFill.style.width = `${pct}%`;
+            if (statusLabel) statusLabel.textContent = `Loading (${pct}%)...`;
           })()
         );
       }
@@ -384,7 +385,15 @@ function isScopeIndexed(scopeKeys) {
 
 // ── Pre-indexing
 async function buildIndex(allFiles) {
-  isIndexed = false; documentIndex.clear();
+  isIndexed = false;
+  const filesToIndex = allFiles.filter(f => !documentIndex.has(fileKey(f)));
+
+  if (filesToIndex.length === 0) {
+    isIndexed = true;
+    setStatus('loaded', `file${allFiles.length !== 1 ? 's' : ''} loaded`);
+    return;
+  }
+
   indexSection?.classList.remove('hidden');
   if (indexFill) indexFill.style.width = '0%';
   if (indexStatus) indexStatus.textContent = 'Processing...';
@@ -399,17 +408,19 @@ async function buildIndex(allFiles) {
       documentIndex.set(fileKey(f), { fileInfo: f, sections });
     } catch (e) {
       console.warn('Index skip:', f.name, e.message);
+      documentIndex.set(fileKey(f), { fileInfo: f, sections: [] });
     }
     completed++;
-    const pct = Math.round((completed / allFiles.length) * 100);
-    if (indexText) indexText.textContent = `Indexing: ${completed}/${allFiles.length} (${pct}%)`;
+    const pct = Math.round((completed / filesToIndex.length) * 100);
+    if (indexText) indexText.textContent = `Indexing: ${completed}/${filesToIndex.length} (${pct}%)`;
     if (indexDetail) indexDetail.textContent = `${getFileIcon(getExt(f.name))} ${f.name}`;
     if (indexFill) indexFill.style.width = `${pct}%`;
+    if (statusLabel) statusLabel.textContent = `Loading index (${pct}%)`;
   }
 
   // Process in parallel batches
-  for (let i = 0; i < allFiles.length; i += CONCURRENCY) {
-    const batch = allFiles.slice(i, i + CONCURRENCY).map(f => processFile(f));
+  for (let i = 0; i < filesToIndex.length; i += CONCURRENCY) {
+    const batch = filesToIndex.slice(i, i + CONCURRENCY).map(f => processFile(f));
     await Promise.all(batch);
   }
 
@@ -714,12 +725,28 @@ async function extractSections(f) {
 
   const ext = getExt(f.name);
   let res;
-  if (ext === 'pdf') res = await extractPDF(f);
-  else if (ext === 'docx') res = await extractDOCX(f);
-  else if (ext === 'pptx' || ext === 'odp') res = await extractPPTX(f, ext);
-  else if (['xlsx', 'xls', 'ods'].includes(ext)) res = await extractXLSX(f);
-  else if (ext === 'odt') res = await extractODT(f);
-  else res = await extractPlainText(f, ext);
+  try {
+    if (ext === 'pdf') res = await extractPDF(f);
+    else if (ext === 'docx') res = await extractDOCX(f);
+    else if (ext === 'pptx' || ext === 'odp') res = await extractPPTX(f, ext);
+    else if (['xlsx', 'xls', 'ods'].includes(ext)) res = await extractXLSX(f);
+    else if (ext === 'odt') res = await extractODT(f);
+    else res = await extractPlainText(f, ext);
+  } catch (e) {
+    console.warn(`[Fallback] Structured extraction failed for ${f.name}: ${e.message}. Attempting raw text recovery.`);
+    try {
+      const buffer = await getBuffer(f);
+      let rawText = new TextDecoder("utf-8", { fatal: false }).decode(buffer);
+      rawText = rawText.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F\uFFFD]/g, ' ').replace(/ {2,}/g, ' ').trim();
+      if (rawText.length > 5) {
+        res = chunkText(rawText, 2000, 'Recovered Text');
+      } else {
+        throw new Error("Recovered text too short");
+      }
+    } catch (fallbackError) {
+      throw new Error(`File is completely unreadable or empty.`);
+    }
+  }
 
   if (res) await CacheManager.set(key, res);
   return res;

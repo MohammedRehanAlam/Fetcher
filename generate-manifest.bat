@@ -11,7 +11,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$root = (Get-Location).Path;" ^
   "$dbPath = Join-Path $root 'database';" ^
   "if (-not (Test-Path $dbPath)) { Write-Host 'ERROR: database folder not found!' -ForegroundColor Red; Read-Host; exit 1; }" ^
-  "$exts = @('*.pdf','*.docx','*.pptx','*.xlsx','*.xls','*.txt','*.csv','*.rtf','*.odt','*.odp','*.ods');" ^
+  "$exts = @('*.pdf','*.docx','*.pptx','*.xlsx','*.xls','*.txt','*.csv','*.rtf','*.odt','*.odp','*.ods','*.srt','*.vtt');" ^
   "$files = ($exts | ForEach-Object { Get-ChildItem -Path $dbPath -Recurse -Filter $_ } | Sort-Object FullName |" ^
   "  ForEach-Object { $_.FullName.Substring($root.Length + 1).Replace('\', '/') }) | Select-Object -Unique;" ^
   "$json = if (@($files).Count -eq 0) { '[]' } else { $files | ConvertTo-Json };" ^

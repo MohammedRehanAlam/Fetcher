@@ -3,6 +3,7 @@ const path = require('path');
 const pdfjs = require('pdfjs-dist/legacy/build/pdf.js');
 const mammoth = require('mammoth');
 const XLSX = require('xlsx');
+const JSZip = require('jszip');
 
 // Configuration
 const DB_DIR = path.join(__dirname, 'database');
@@ -44,6 +45,17 @@ async function run() {
       }
     } catch (e) {
       console.error(`\n❌ Error indexing ${filePath}: ${e.message}`);
+      currentChunk[relPath] = {
+        fileInfo: { name: path.basename(filePath), serverPath: relPath },
+        sections: []
+      };
+      processedInChunk++;
+      if (processedInChunk >= CHUNK_SIZE) {
+        await saveChunk(currentChunk, chunkCount);
+        currentChunk = {};
+        chunkCount++;
+        processedInChunk = 0;
+      }
     }
   }
 
@@ -84,42 +96,84 @@ async function getAllFiles(dir) {
 
 async function extractSections(filePath, ext) {
   const buffer = await fs.readFile(filePath);
-  if (ext === 'pdf') return extractPDF(buffer);
-  if (ext === 'docx') {
-    const res = await mammoth.extractRawText({ buffer });
-    return chunkText(res.value, 2000, 'Section');
-  }
-  if (ext === 'xlsx' || ext === 'xls') {
-    const wb = XLSX.read(buffer, { type: 'buffer' });
-    return wb.SheetNames.map(n => ({
-      location: `Sheet: ${n}`,
-      text: XLSX.utils.sheet_to_csv(wb.Sheets[n]),
-      type: 'table',
-      data: XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1 })
-    }));
-  }
-  if (ext === 'csv' || ext === 'txt' || ext === 'srt' || ext === 'vtt' || ext === 'rtf') {
-    let t = buffer.toString('utf-8');
-    if (ext === 'rtf') t = t.replace(/\{\\[^}]*\}/g, '').replace(/\\[a-z]+\-?\d*\s?/gi, '').replace(/[{}\\]/g, '').replace(/\s+/g, ' ');
-    if (ext === 'srt' || ext === 'vtt') {
-      const blocks = t.trim().split(/\n\s*\n/);
-      const rows = blocks.map(block => {
-        const lines = block.split('\n').map(l => l.trim()).filter(l => l);
-        if (lines.length < 2) return null;
-        let time = "", text = "";
-        if (ext === 'srt') { time = lines[1] || ""; text = lines.slice(2).join(' '); }
-        else { if (lines[0].includes('-->')) { time = lines[0]; text = lines.slice(1).join(' '); } else if (lines[1]?.includes('-->')) { time = lines[1]; text = lines.slice(2).join(' '); } }
-        return time ? [time, text] : null;
-      }).filter(r => r);
-      if (rows.length) return [{ location: 'Transcript', text: t, type: 'table', data: [['Time', 'Transcription'], ...rows] }];
+
+  try {
+    if (ext === 'pdf') return await extractPDF(buffer);
+    if (ext === 'docx') {
+      const res = await mammoth.extractRawText({ buffer });
+      return chunkText(res.value, 2000, 'Section');
     }
-    if (ext === 'csv' || t.includes('\t') || (t.includes('  ') && t.split('\n')[0].split(/ {2,}|\t/).length > 2)) {
-      const rows = t.split('\n').filter(l => l.trim()).map(line => line.split(ext === 'csv' ? ',' : / {2,}|\t/).map(c => c.trim()));
-      return [{ location: 'Document', text: t, type: 'table', data: rows }];
+    if (ext === 'xlsx' || ext === 'xls' || ext === 'ods') {
+      const wb = XLSX.read(buffer, { type: 'buffer' });
+      return wb.SheetNames.map(n => ({
+        location: `Sheet: ${n}`,
+        text: XLSX.utils.sheet_to_csv(wb.Sheets[n]),
+        type: 'table',
+        data: XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1 })
+      }));
     }
-    return chunkText(t, 50, 'Lines', true);
+    if (ext === 'pptx' || ext === 'odp') {
+      const zip = await JSZip.loadAsync(buffer);
+      const s = [];
+      if (ext === 'pptx') {
+        let n = 1;
+        while (true) {
+          const sl = zip.file(`ppt/slides/slide${n}.xml`);
+          if (!sl) break;
+          s.push({ location: `Slide ${n}`, text: xmlToText(await sl.async('text')) });
+          n++;
+        }
+      } else {
+        const c = zip.file('content.xml');
+        if (c) {
+          const xml = await c.async('text');
+          xml.split('<draw:page').slice(1).forEach((pg, i) => s.push({ location: `Slide ${i + 1}`, text: xmlToText(pg) }));
+        }
+      }
+      return s;
+    }
+    if (ext === 'odt') {
+      const zip = await JSZip.loadAsync(buffer);
+      const c = zip.file('content.xml');
+      if (c) return chunkText(xmlToText(await c.async('text')), 2000, 'Section');
+      return [];
+    }
+
+    if (['csv', 'txt', 'srt', 'vtt', 'rtf'].includes(ext)) {
+      let t = buffer.toString('utf-8');
+      if (ext === 'rtf') t = t.replace(/\{\\[^}]*\}/g, '').replace(/\\[a-z]+\-?\d*\s?/gi, '').replace(/[{}\\]/g, '').replace(/\s+/g, ' ');
+      if (ext === 'srt' || ext === 'vtt') {
+        const blocks = t.trim().split(/\n\s*\n/);
+        const rows = blocks.map(block => {
+          const lines = block.split('\n').map(l => l.trim()).filter(l => l);
+          if (lines.length < 2) return null;
+          let time = "", text = "";
+          if (ext === 'srt') { time = lines[1] || ""; text = lines.slice(2).join(' '); }
+          else { if (lines[0].includes('-->')) { time = lines[0]; text = lines.slice(1).join(' '); } else if (lines[1]?.includes('-->')) { time = lines[1]; text = lines.slice(2).join(' '); } }
+          return time ? [time, text] : null;
+        }).filter(r => r);
+        if (rows.length) return [{ location: 'Transcript', text: t, type: 'table', data: [['Time', 'Transcription'], ...rows] }];
+      }
+      if (ext === 'csv' || t.includes('\t') || (t.includes('  ') && t.split('\n')[0].split(/ {2,}|\t/).length > 2)) {
+        const rows = t.split('\n').filter(l => l.trim()).map(line => line.split(ext === 'csv' ? ',' : / {2,}|\t/).map(c => c.trim()));
+        return [{ location: 'Document', text: t, type: 'table', data: rows }];
+      }
+      return chunkText(t, 50, 'Lines', true);
+    }
+  } catch (e) {
+    console.warn(`[Fallback] Structured extraction failed for ${path.basename(filePath)}: ${e.message}. Attempting raw text recovery.`);
   }
-  return [{ location: 'Document', text: 'Structure extraction for ZIP types (PPTX/ODT) requires JSZip in Node.' }];
+
+  // Fallback / Raw Text Recovery (for any failed file, falsely-extensioned text files, or unknown formats)
+  let rawText = buffer.toString('utf-8');
+  // Clean up binary garbage (control characters and invalid UTF-8 symbols) but PRESERVE all international Unicode languages:
+  rawText = rawText.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F\uFFFD]/g, ' ').replace(/ {2,}/g, ' ').trim();
+  
+  if (rawText.length > 5) {
+    return chunkText(rawText, 2000, 'Recovered Text');
+  }
+  
+  throw new Error(`File is completely unreadable or empty.`);
 }
 
 async function extractPDF(buffer) {
@@ -178,5 +232,7 @@ function chunkText(text, size, pfx, byLines = false) {
   }
   return c.length ? c : [{ location: pfx + ' 1', text }];
 }
+
+function xmlToText(xml) { return xml.replace(/<[^>]+>/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/\s+/g, ' ').trim(); }
 
 run().catch(console.error);

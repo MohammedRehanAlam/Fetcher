@@ -48,8 +48,8 @@
   <main class="main">
 
     <!-- Step 1: Load Database -->
-    <!-- <section class="card" id="step-load">
-      <div class="step-badge">01</div>
+    <!-- <section class="card" id="step-load"> -->
+      <!-- <div class="step-badge">01</div>
       <button id="db-toggle-btn" class="card-toggle-btn hidden" aria-label="Expand or collapse section">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 15 12 9 18 15"></polyline></svg>
       </button>
@@ -100,7 +100,7 @@
                 Run <strong>generate-manifest.bat</strong> from the project folder, then try again.
               </div>
             </div> -->
-          <!-- </div>end load-options -->
+          <!-- </div> end load-options -->
         <!-- </div>end db-full-view -->
 
         <!-- <div id="db-collapsed-view" class="db-collapsed-view hidden">
@@ -111,9 +111,9 @@
               <span id="db-collapsed-name" class="db-collapsed-name"></span>
             </div>
           </div>
-        </div>
+        </div> -->
 
-        <div id="db-info" class="db-info hidden"></div> -->
+        <!-- <div id="db-info" class="db-info hidden"></div> -->
 
         <!-- Indexing progress (automated during search) -->
         <!-- <div id="index-section" class="index-section hidden">
@@ -148,6 +148,7 @@
       </div>
     </section> -->
 
+    
     <!-- Step 2: Select Scope -->
     <section class="card disabled-card" id="step-scope">
       <!-- <div class="step-badge">02</div> -->
@@ -158,6 +159,15 @@
           <div class="scope-placeholder">Load a database first to see folder options.</div>
         </div>
         <div id="scope-summary" class="scope-summary hidden"></div>
+      </div>
+      <!-- Indexing progress (automated during search) -->
+      <div id="index-section" class="index-section hidden">
+        <div class="index-header">
+          <span id="index-text">Indexing documents…</span>
+          <span id="index-status" class="index-status"></span>
+        </div>
+        <div class="progress-track"><div class="progress-fill" id="index-fill"></div></div>
+        <div id="index-detail" class="progress-detail"></div>
       </div>
     </section>
 
