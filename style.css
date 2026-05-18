@@ -556,9 +556,11 @@ body {
   .search-row { flex-direction: column; }
   .dropdown-group { min-width: unset; width: 100%; }
   .logo-tag { display: none; }
-  .results-header { flex-wrap: wrap; gap: 10px; }
-  .results-title { flex: 1 1 100%; }
-  .results-meta { width: 100%; justify-content: flex-end; gap: 8px; }
+  .results-header { flex-wrap: nowrap; gap: 8px; align-items: center; }
+  .results-title { font-size: 18px; flex-shrink: 0; }
+  .results-meta { display: flex; align-items: center; gap: 6px; min-width: 0; flex-shrink: 1; }
+  .results-count { font-size: 11px; padding: 4px 10px; white-space: nowrap; text-overflow: ellipsis; overflow: hidden; flex-shrink: 1; }
+  .btn-clear { padding: 4px 10px; font-size: 12px; flex-shrink: 0; }
 }
 
 /* ── Indexing section ── */
