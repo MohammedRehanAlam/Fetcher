@@ -458,7 +458,7 @@ body {
 .results-header { display: flex; justify-content: space-between; align-items: center; }
 .results-title { font-size: 20px; font-weight: 700; }
 .results-meta { display: flex; align-items: center; gap: 12px; }
-.results-count { background: linear-gradient(135deg,var(--primary),var(--primary-end)); color: white; padding: 4px 14px; border-radius: 99px; font-size: 13px; font-weight: 700; }
+.results-count { background: linear-gradient(135deg,var(--primary),var(--primary-end)); color: white; padding: 4px 14px; border-radius: 99px; font-size: 13px; font-weight: 700; white-space: nowrap; }
 .results-container { display: flex; flex-direction: column; gap: 14px; }
 
 /* ── Result Card ── */
@@ -556,6 +556,9 @@ body {
   .search-row { flex-direction: column; }
   .dropdown-group { min-width: unset; width: 100%; }
   .logo-tag { display: none; }
+  .results-header { flex-wrap: wrap; gap: 10px; }
+  .results-title { flex: 1 1 100%; }
+  .results-meta { width: 100%; justify-content: flex-end; gap: 8px; }
 }
 
 /* ── Indexing section ── */
