@@ -611,11 +611,14 @@ async function startSearch() {
 
   // Get only the active, supported files in this scope to search
   const activeScopeFiles = scopeFiles.filter(f => activeTypes.has(getExt(f.name)));
-  const total = activeScopeFiles.length;
+  const filesToSearch = isIndexed 
+    ? activeScopeFiles.filter(f => documentIndex.has(fileKey(f))) 
+    : activeScopeFiles;
+  const total = filesToSearch.length;
 
   if (isIndexed) {
     let processed = 0;
-    for (const f of activeScopeFiles) {
+    for (const f of filesToSearch) {
       if (cancelSearch) break;
       const k = fileKey(f);
       const entry = documentIndex.get(k);
@@ -654,7 +657,7 @@ async function startSearch() {
     }
   } else {
     let processed = 0;
-    for (const f of activeScopeFiles) {
+    for (const f of filesToSearch) {
       if (cancelSearch) break;
       processed++;
       
@@ -693,6 +696,11 @@ async function startSearch() {
   }
 
   if (progressFill) progressFill.style.width = '100%';
+  if (progressText && total > 0) progressText.textContent = `Searching ${total} of ${total}…`;
+  
+  // Wait 350ms for the progress bar transition to fully complete and hit the right edge visually
+  await new Promise(r => setTimeout(r, 350));
+
   finalizeResults(results, total, cancelSearch);
   searchRunning = false;
   if (findBtn) findBtn.disabled = false;
