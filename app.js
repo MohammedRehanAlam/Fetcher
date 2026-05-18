@@ -573,9 +573,13 @@ async function startSearch() {
 
   // Branch tracking to clear memory if switching completely (e.g. sibling folders)
   if (lastSelectedPath !== null && !isSameBranch(lastSelectedPath, selectedPath)) {
-    console.log('Switched to a different branch. Clearing memory to save RAM.');
-    documentIndex.clear();
-    isIndexed = false;
+    if (!isScopeIndexed(scopeKeys)) {
+      console.log('Switched to a different branch. Clearing memory to save RAM.');
+      documentIndex.clear();
+      isIndexed = false;
+    } else {
+      console.log('Switched to a different branch, but it is already fully indexed. Retaining memory.');
+    }
   }
   lastSelectedPath = [...selectedPath];
 
