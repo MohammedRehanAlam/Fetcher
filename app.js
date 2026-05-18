@@ -261,6 +261,14 @@ async function tryLoadPrecomputedIndex(scopeKeys) {
       if (infoRes.ok) {
         const info = await infoRes.json();
         totalChunks = info.totalChunks;
+        
+        // Auto Cache Invalidation: if index has been re-generated, clear stale browser cache!
+        const cachedIndexedAt = localStorage.getItem('fetcher_index_indexed_at');
+        if (info.indexedAt && String(info.indexedAt) !== cachedIndexedAt) {
+          console.log('🔄 Freshly indexed database detected. Clearing browser cache...');
+          await CacheManager.clear();
+          localStorage.setItem('fetcher_index_indexed_at', String(info.indexedAt));
+        }
       }
     } catch (e) { console.log('Metadata not found, falling back to serial discovery.'); }
 
@@ -611,23 +619,21 @@ async function startSearch() {
 
   // Get only the active, supported files in this scope to search
   const activeScopeFiles = scopeFiles.filter(f => activeTypes.has(getExt(f.name)));
-  const filesToSearch = isIndexed 
-    ? activeScopeFiles.filter(f => documentIndex.has(fileKey(f))) 
-    : activeScopeFiles;
-  const total = filesToSearch.length;
+  const total = activeScopeFiles.length;
 
   if (isIndexed) {
     let processed = 0;
-    for (const f of filesToSearch) {
+    for (const f of activeScopeFiles) {
       if (cancelSearch) break;
-      const k = fileKey(f);
-      const entry = documentIndex.get(k);
-      if (!entry) continue; // Safety fallback
       processed++;
       
       if (progressText) progressText.textContent = `Searching ${processed} of ${total}…`;
-      if (progressDetail) progressDetail.textContent = entry.fileInfo.name;
+      if (progressDetail) progressDetail.textContent = f.name;
       if (progressFill) progressFill.style.width = `${Math.round((processed / total) * 100)}%`;
+      
+      const k = fileKey(f);
+      const entry = documentIndex.get(k);
+      if (!entry) continue; // Safety fallback
       
       const { fileInfo, sections } = entry;
       const groupedMatches = new Map();
@@ -657,7 +663,7 @@ async function startSearch() {
     }
   } else {
     let processed = 0;
-    for (const f of filesToSearch) {
+    for (const f of activeScopeFiles) {
       if (cancelSearch) break;
       processed++;
       
@@ -696,11 +702,6 @@ async function startSearch() {
   }
 
   if (progressFill) progressFill.style.width = '100%';
-  if (progressText && total > 0) progressText.textContent = `Searching ${total} of ${total}…`;
-  
-  // Wait 350ms for the progress bar transition to fully complete and hit the right edge visually
-  await new Promise(r => setTimeout(r, 350));
-
   finalizeResults(results, total, cancelSearch);
   searchRunning = false;
   if (findBtn) findBtn.disabled = false;
@@ -714,10 +715,15 @@ function appendResult(res, terms, index, totalOcc) {
 
 function finalizeResults(results, totalScanned, cancelled) {
   if (progressHideTimeout) clearTimeout(progressHideTimeout);
-  progressSect?.classList.add('fade-out');
+  if (progressFill) progressFill.style.width = '100%';
+  
+  // Wait for the progress bar transition (300ms) to complete before fading out!
   progressHideTimeout = setTimeout(() => {
-    progressSect?.classList.add('hidden');
-  }, 450);
+    progressSect?.classList.add('fade-out');
+    progressHideTimeout = setTimeout(() => {
+      progressSect?.classList.add('hidden');
+    }, 450);
+  }, 400);
 
   if (cancelled && resultsCont) {
     resultsCont.insertAdjacentHTML('afterbegin', `<div class="warn-banner">⚠️ Search cancelled — partial results (${totalScanned} files scanned).</div>`);

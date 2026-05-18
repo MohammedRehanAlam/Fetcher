@@ -13,25 +13,49 @@ const SUPPORTED_EXT = ['pdf', 'docx', 'pptx', 'xlsx', 'xls', 'txt', 'csv', 'rtf'
 async function run() {
   console.log('🚀 Starting Robust Deep Indexer...');
   const files = await getAllFiles(DB_DIR);
-  const total = files.length;
+  // Sort files naturally/numerically (e.g. S29_202_2 before S29_202_100)
+  files.sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
+
+  // Filter out internal database/index files silently so they are not included in counts or loops
+  const targetFiles = files.filter(filePath => {
+    const filename = path.basename(filePath);
+    return !(filename === 'manifest.json' || filename === 'search-index-info.json' || filename === 'indexing-report.json' || filename.startsWith('search-index-') || filename === 'search-index.json' || filename === 'README.txt');
+  });
+  const total = targetFiles.length;
   
   let currentChunk = {};
   let chunkCount = 0;
   let processedInChunk = 0;
 
+  const indexedFiles = [];
+  const corruptedFiles = [];
+  const skippedFiles = [];
+  const ignoredFiles = [];
+
   for (let i = 0; i < total; i++) {
-    const filePath = files[i];
+    const filePath = targetFiles[i];
     const relPath = path.relative(__dirname, filePath).replace(/\\/g, '/');
     const ext = path.extname(filePath).toLowerCase().slice(1);
-    
-    if (!SUPPORTED_EXT.includes(ext)) continue;
+    const filename = path.basename(filePath);
 
-    process.stdout.write(`\rIndexing [${i + 1}/${total}]: ${path.basename(filePath)}... `);
+    if (!SUPPORTED_EXT.includes(ext)) {
+      ignoredFiles.push({ path: relPath, reason: `Unsupported extension: .${ext}` });
+      continue;
+    }
+
+    process.stdout.write(`\rIndexing [${i + 1}/${total}]: ${relPath}... `);
 
     try {
       const sections = await extractSections(filePath, ext);
+      
+      if (sections.length === 0) {
+        skippedFiles.push({ path: relPath, reason: 'Empty text / No content extracted' });
+      } else {
+        indexedFiles.push(relPath);
+      }
+
       currentChunk[relPath] = {
-        fileInfo: { name: path.basename(filePath), serverPath: relPath },
+        fileInfo: { name: filename, serverPath: relPath },
         sections: sections
       };
       processedInChunk++;
@@ -44,9 +68,11 @@ async function run() {
         processedInChunk = 0;
       }
     } catch (e) {
-      console.error(`\n❌ Error indexing ${filePath}: ${e.message}`);
+      console.error(`\n❌ Error indexing ${relPath}: ${e.message}`);
+      corruptedFiles.push({ path: relPath, error: e.message });
+
       currentChunk[relPath] = {
-        fileInfo: { name: path.basename(filePath), serverPath: relPath },
+        fileInfo: { name: filename, serverPath: relPath },
         sections: []
       };
       processedInChunk++;
@@ -67,9 +93,55 @@ async function run() {
 
   // Save index metadata for parallel loading
   const infoPath = path.join(DB_DIR, 'search-index-info.json');
-  await fs.outputJson(infoPath, { totalChunks: chunkCount }, { spaces: 2 });
+  await fs.outputJson(infoPath, { totalChunks: chunkCount, indexedAt: Date.now() }, { spaces: 2 });
 
-  console.log(`\n\n✅ Indexing complete! Saved ${chunkCount} index chunks.`);
+  // Save detailed indexing report
+  const reportPath = path.join(DB_DIR, 'indexing-report.json');
+  await fs.outputJson(reportPath, {
+    summary: {
+      totalFoundInDirectory: total,
+      successfullyIndexed: indexedFiles.length,
+      skippedEmpty: skippedFiles.length,
+      corruptedFailed: corruptedFiles.length,
+      ignoredUnsupported: ignoredFiles.length
+    },
+    corruptedFiles,
+    skippedFiles,
+    ignoredFiles
+  }, { spaces: 2 });
+
+  console.log(`\n\n============================================`);
+  console.log(`✅ Indexing complete! Saved ${chunkCount} index chunks.`);
+  console.log(`============================================`);
+  console.log(`📊 INDEXING SUMMARY:`);
+  console.log(`   - Successfully Indexed: ${indexedFiles.length} file(s)`);
+  console.log(`   - Ignored (Unsupported): ${ignoredFiles.length} file(s)`);
+  console.log(`   - Skipped (Empty/No text): ${skippedFiles.length} file(s)`);
+  console.log(`   - Corrupted/Failed:     ${corruptedFiles.length} file(s)`);
+  console.log(`============================================`);
+  
+  if (corruptedFiles.length > 0) {
+    console.log(`\n⚠️  CORRUPTED/FAILED FILES:`);
+    corruptedFiles.forEach((f, idx) => {
+      console.log(`   ${idx + 1}. ${f.path} (Error: ${f.error})`);
+    });
+  }
+
+  if (skippedFiles.length > 0) {
+    console.log(`\nℹ️  SKIPPED/EMPTY FILES:`);
+    skippedFiles.forEach((f, idx) => {
+      console.log(`   ${idx + 1}. ${f.path}`);
+    });
+  }
+
+  if (ignoredFiles.length > 0) {
+    console.log(`\n🚫 IGNORED/UNSUPPORTED FILES:`);
+    ignoredFiles.forEach((f, idx) => {
+      console.log(`   ${idx + 1}. ${f.path} (${f.reason})`);
+    });
+  }
+
+  console.log(`\n📂 Full indexing report saved to: database/indexing-report.json`);
   console.log('✨ All done. Upload all search-index-*.json files to your server.');
 }
 
