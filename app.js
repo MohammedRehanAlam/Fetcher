@@ -35,6 +35,7 @@ let documentIndex = new Map(), isIndexed = false, selectedTypes = new Set(), sea
 let currentMethod = null; // 'Browse Folder' or 'Pre-loaded Database'
 let indexingMode = 'turbo'; // 'standard' or 'turbo'
 let lastSelectedPath = null; // Track path to smartly clear memory
+let progressHideTimeout = null; // Track progress fade timeout
 
 // ── DOM (all optional — safe if element is commented out)
 const $ = id => document.getElementById(id);
@@ -333,15 +334,8 @@ async function tryLoadPrecomputedIndex(scopeKeys) {
       }
     }
 
-    // Guarantee that ALL scopeKeys are marked as indexed to prevent infinite re-indexing loops
-    // if the precomputed chunks are outdated and missing some files.
-    if (scopeKeys) {
-      for (const k of scopeKeys) {
-        if (!documentIndex.has(k)) {
-          documentIndex.set(k, { fileInfo: { name: k.split('/').pop(), serverPath: k }, sections: [] });
-        }
-      }
-    }
+    // Smart Outdated Index Handling: If the precomputed chunks loaded successfully but some files 
+    // are missing from the precomputed index, we will leave them out so they can be indexed on the fly.
 
     if (documentIndex.size > 0) {
       isIndexed = true;
@@ -370,10 +364,19 @@ async function runIndexingForScope(filesToIndex, scopeKeys) {
       setStatus('indexing', 'Indexing…');
       await buildIndex(filesToIndex);
     } else {
-      if (indexFill) indexFill.style.width = '100%';
-      if (indexText) indexText.textContent = `✅ ${documentIndex.size} files loaded`;
-      if (indexStatus) indexStatus.textContent = 'Ready';
-      setStatus('loaded', `file${filesToIndex.length !== 1 ? 's' : ''} loaded`);
+      // Smart Incremental Loading: If some files in this scope are still missing from the precomputed index,
+      // index them on the fly now so they are not silently skipped!
+      const missingFiles = filesToIndex.filter(f => !documentIndex.has(fileKey(f)));
+      if (missingFiles.length > 0) {
+        console.log(`Precomputed index loaded, but ${missingFiles.length} files are missing. Indexing them on the fly...`);
+        setStatus('indexing', `Indexing ${missingFiles.length} new files…`);
+        await buildIndex(filesToIndex);
+      } else {
+        if (indexFill) indexFill.style.width = '100%';
+        if (indexText) indexText.textContent = `✅ ${documentIndex.size} files loaded`;
+        if (indexStatus) indexStatus.textContent = 'Ready';
+        setStatus('loaded', `file${filesToIndex.length !== 1 ? 's' : ''} loaded`);
+      }
     }
   } 
   // STANDARD MODE (On-the-fly indexing via browser/.bat manifest)
@@ -588,6 +591,11 @@ async function startSearch() {
     await runIndexingForScope(scopeFiles, scopeKeys);
   }
 
+  if (progressHideTimeout) {
+    clearTimeout(progressHideTimeout);
+    progressHideTimeout = null;
+  }
+  progressSect?.classList.remove('fade-out');
   progressSect?.classList.remove('hidden');
   resultsSect?.classList.add('hidden');
   if (resultsCont) resultsCont.innerHTML = '';
@@ -601,18 +609,24 @@ async function startSearch() {
   if (resultsCont) resultsCont.innerHTML = '';
   if (resultsCount) resultsCount.textContent = 'Searching...';
 
+  // Get only the active, supported files in this scope to search
+  const activeScopeFiles = scopeFiles.filter(f => activeTypes.has(getExt(f.name)));
+  const total = activeScopeFiles.length;
+
   if (isIndexed) {
-    let processed = 0, total = 0;
-    for (const [k] of documentIndex) if (scopeKeys.has(k)) total++;
-    for (const [k, { fileInfo, sections }] of documentIndex) {
-      if (!scopeKeys.has(k)) continue;
-      if (!activeTypes.has(getExt(fileInfo.name))) continue;
+    let processed = 0;
+    for (const f of activeScopeFiles) {
       if (cancelSearch) break;
+      const k = fileKey(f);
+      const entry = documentIndex.get(k);
+      if (!entry) continue; // Safety fallback
       processed++;
+      
       if (progressText) progressText.textContent = `Searching ${processed} of ${total}…`;
-      if (progressDetail) progressDetail.textContent = fileInfo.name;
+      if (progressDetail) progressDetail.textContent = entry.fileInfo.name;
       if (progressFill) progressFill.style.width = `${Math.round((processed / total) * 100)}%`;
       
+      const { fileInfo, sections } = entry;
       const groupedMatches = new Map();
       for (const sec of sections) {
         const occs = findAllOccurrences(sec.text, terms, mode, caseSensitive, wholeWord);
@@ -639,13 +653,14 @@ async function startSearch() {
       await tick();
     }
   } else {
-    for (let i = 0; i < scopeFiles.length; i++) {
+    let processed = 0;
+    for (const f of activeScopeFiles) {
       if (cancelSearch) break;
-      const f = scopeFiles[i];
-      if (!activeTypes.has(getExt(f.name))) continue;
-      if (progressText) progressText.textContent = `Searching ${i + 1} of ${scopeFiles.length}…`;
+      processed++;
+      
+      if (progressText) progressText.textContent = `Searching ${processed} of ${total}…`;
       if (progressDetail) progressDetail.textContent = f.name;
-      if (progressFill) progressFill.style.width = `${Math.round((i / scopeFiles.length) * 100)}%`;
+      if (progressFill) progressFill.style.width = `${Math.round((processed / total) * 100)}%`;
       
       try { 
         const secs = await extractSections(f); 
@@ -673,12 +688,12 @@ async function startSearch() {
           appendResult(res, terms, results.length - 1, totalOccurrences);
         } 
       }
-      catch (e) { console.warn('Skipped:', f.name); }
+      catch (e) { console.warn('Skipped:', f.name, e); }
     }
   }
 
   if (progressFill) progressFill.style.width = '100%';
-  finalizeResults(results, scopeFiles.length, cancelSearch);
+  finalizeResults(results, total, cancelSearch);
   searchRunning = false;
   if (findBtn) findBtn.disabled = false;
   setStatus('loaded', `search complete`);
@@ -690,7 +705,12 @@ function appendResult(res, terms, index, totalOcc) {
 }
 
 function finalizeResults(results, totalScanned, cancelled) {
-  progressSect?.classList.add('hidden');
+  if (progressHideTimeout) clearTimeout(progressHideTimeout);
+  progressSect?.classList.add('fade-out');
+  progressHideTimeout = setTimeout(() => {
+    progressSect?.classList.add('hidden');
+  }, 450);
+
   if (cancelled && resultsCont) {
     resultsCont.insertAdjacentHTML('afterbegin', `<div class="warn-banner">⚠️ Search cancelled — partial results (${totalScanned} files scanned).</div>`);
   }
@@ -798,7 +818,7 @@ async function extractPDF(f) {
     // Group into rows by Y
     const rows = [];
     tc.items.forEach(item => {
-      let r = rows.find(row => Math.abs(row.y - item.transform[5]) < 5);
+      let r = rows.find(row => Math.abs(row.y - item.transform[5]) < 10);
       if (!r) { r = { y: item.transform[5], items: [] }; rows.push(r); }
       r.items.push(item);
     });
@@ -837,9 +857,7 @@ async function extractPDF(f) {
       return rowCells;
     });
 
-    const isTable = colStarts.length >= 3 && structuredRows.filter(r => r.filter(c => c).length >= 3).length > rows.length * 0.15;
-    if (isTable) s.push({ location: `Page ${p}`, text: structuredRows.map(r => r.join(" \t ")).join("\n"), type: 'table', data: structuredRows });
-    else s.push({ location: `Page ${p}`, text: structuredRows.map(r => r.join(" ")).join("\n") });
+    s.push({ location: `Page ${p}`, text: structuredRows.map(r => r.join(" \t ")).join("\n"), type: 'table', data: structuredRows });
   }
   
   // Free PDF memory

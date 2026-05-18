@@ -429,6 +429,13 @@ body {
 .progress-section {
   background: var(--surface); border: 1px solid var(--border);
   border-radius: var(--radius); padding: 22px 28px; backdrop-filter: blur(10px);
+  transition: opacity 0.4s cubic-bezier(0.4, 0, 0.2, 1), transform 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  opacity: 1;
+  transform: translateY(0);
+}
+.progress-section.fade-out {
+  opacity: 0;
+  transform: translateY(8px);
 }
 .progress-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
 #progress-text { font-size: 14px; font-weight: 600; }
