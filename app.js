@@ -2,7 +2,7 @@
 const DATABASE_DIR_NAME = 'example database'; // Change this folder name here and everything updates automatically!
 const SUPPORTED_EXT = ['pdf', 'docx', 'pptx', 'xlsx', 'xls', 'txt', 'csv', 'rtf', 'odt', 'odp', 'ods', 'srt', 'vtt'];
 const HISTORY_KEY = 'fetcher_history';
-const AUTO_LOAD_DB = false; // Set to true to automatically load the database on startup
+const AUTO_LOAD_DB = true; // Set to true to automatically load the database on startup
 const SNIPPET_RADIUS = 100;
 const ENABLE_INDEXING = true;
 const COMPRESSED_SEARCH_INDEXES = true; // Set to true to use compressed search indexes (.json.gz) by default
