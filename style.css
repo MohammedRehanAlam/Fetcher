@@ -728,13 +728,11 @@ body {
 
 /* ── Tabular Data UI ── */
 .match-table-wrapper {
-  margin-top: 10px;
-  margin-left: 15px;
+  margin-left: 10px;  /* ← CHANGE THIS to shift table left/right */
   overflow-x: auto;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   background: rgba(0,0,0,0.2);
-  width: calc(100% - 15px);
 }
 .match-table {
   width: 100%;
@@ -750,6 +748,12 @@ body {
   max-width: 400px;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+/* ── Last column inner padding ───────────────────────────────────────────────
+   📦 TO ADD MORE SPACE INSIDE the last column on the right → increase padding-right
+   ──────────────────────────────────────────────────────────────────────────── */
+.match-table th:last-child, .match-table td:last-child {
+  padding-right: 20px; /* ← inner breathing room for the last column (e.g. EPIC NO) */
 }
 .match-table td {
   font-size: 13px;
@@ -770,12 +774,12 @@ body {
 }
 .match-table-wrapper {
   margin-top: 12px;
+  /* margin-right: -3px; */
   overflow-x: auto;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   background: rgba(0,0,0,0.5);
-  width: fit-content;
-  max-width: 100%;
+  width: calc(100% - 7px);     /* ← controls how wide the table box is */
   scrollbar-width: thin;
 }
 .match-table tr:nth-child(even) td {
@@ -794,17 +798,17 @@ body {
   box-shadow: 0 0 15px rgba(251,191,36,0.3);
 }
 .match-table-meta {
-  font-size: 11px;
-  color: var(--cyan);
+  font-size: 11px;                          /* ← text size of the bar label */
+  color: var(--cyan);                       /* ← text color (cyan = #06b6d4) */
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.1em;
-  padding: 8px 16px;
-  background: rgba(6,182,212,0.05);
-  border-left: 3px solid var(--cyan);
-  margin: 10px 0 10px 15px;
-  border-radius: 0 4px 4px 0;
-  opacity: 0.85;
+  padding: 8px 16px;                        /* ← inner spacing: top/bottom=8px, left/right=16px */
+  background: rgba(6,182,212,0.05);         /* ← faint blue tint; raise alpha for stronger color */
+  border-left: 3px solid var(--cyan);       /* ← left accent stripe; change 3px for thickness */
+  margin: 10px 0 10px 15px;                /* ← top=10px right=0 bottom=10px LEFT=15px (indent) */
+  border-radius: 0 10px 4px 0;              /* ← left=sharp, right=rounded */
+  opacity: 0.85;                            /* ← overall transparency; 1 = fully opaque */
   white-space: nowrap;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
