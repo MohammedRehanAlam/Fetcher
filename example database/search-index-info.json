@@ -1,6 +1,7 @@
 {
   "totalChunks": 8,
-  "indexedAt": 1779945928409,
+  "indexedAt": 1779992247161,
+  "codeHash": "470188bc326464fd5b0edac3286d313fca3da8aa7455e5c14d2fae42ae50074e",
   "fileToChunk": {
     "example database/Hyderabad/209-Secunderabad/S29_209_1.pdf": 1,
     "example database/Hyderabad/209-Secunderabad/S29_209_2.pdf": 1,
@@ -589,5 +590,15 @@
     "example database/Hyderabad/211-Secunderabad Cantonment/S29_211_342.pdf": 8,
     "example database/Hyderabad/211-Secunderabad Cantonment/S29_211_343.pdf": 8
   },
-  "compressed": true
+  "compressed": true,
+  "chunkTimestamps": {
+    "1": 1779992232843,
+    "2": 1779992235141,
+    "3": 1779992237213,
+    "4": 1779992239213,
+    "5": 1779992241384,
+    "6": 1779992243933,
+    "7": 1779992246368,
+    "8": 1779992247160
+  }
 }

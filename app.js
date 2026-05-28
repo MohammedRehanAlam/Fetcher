@@ -16,17 +16,15 @@ const CacheManager = {
   CACHE_NAME: 'fetcher-index-cache-v1',
   async get(url) {
     try {
-      const key = url.split('?')[0]; // Strip timestamp for cache key
       const cache = await caches.open(this.CACHE_NAME);
-      const res = await cache.match(key);
+      const res = await cache.match(url);
       return res ? await res.json() : null;
     } catch { return null; }
   },
   async set(url, data) {
     try {
-      const key = url.split('?')[0]; // Strip timestamp for cache key
       const cache = await caches.open(this.CACHE_NAME);
-      await cache.put(key, new Response(JSON.stringify(data)));
+      await cache.put(url, new Response(JSON.stringify(data)));
     } catch (e) { console.warn('Cache set failed:', e); }
   },
   async clear() { try { await caches.delete(this.CACHE_NAME); } catch {} }
@@ -284,13 +282,7 @@ async function tryLoadPrecomputedIndex(scopeKeys) {
         info = await infoRes.json();
         totalChunks = info.totalChunks;
         
-        // Auto Cache Invalidation: if index has been re-generated, clear stale browser cache!
-        const cachedIndexedAt = localStorage.getItem('fetcher_index_indexed_at');
-        if (info.indexedAt && String(info.indexedAt) !== cachedIndexedAt) {
-          console.log('🔄 Freshly indexed database detected. Clearing browser cache...');
-          await CacheManager.clear();
-          localStorage.setItem('fetcher_index_indexed_at', String(info.indexedAt));
-        }
+        // Granular chunk caching is handled dynamically via URL timestamps in chunkTimestamps!
       }
     } catch (e) { console.log('Metadata not found, falling back to serial discovery.'); }
 
@@ -330,7 +322,8 @@ async function tryLoadPrecomputedIndex(scopeKeys) {
       const fetchPromises = [];
       chunksToLoad.forEach((chunkIdx) => {
         const fileName = `search-index-${chunkIdx}${extSuffix}`; // chunkIdx from fileToChunk is 1-based
-        const url = `${DATABASE_DIR_NAME}/${fileName}?t=` + Date.now();
+        const chunkTime = (info && info.chunkTimestamps && info.chunkTimestamps[chunkIdx]) || Date.now();
+        const url = `${DATABASE_DIR_NAME}/${fileName}?t=${chunkTime}`;
         
         fetchPromises.push(
           (async () => {
@@ -374,7 +367,8 @@ async function tryLoadPrecomputedIndex(scopeKeys) {
       let chunkIdx = 1; // starts at 1, matching the 1-based file naming (search-index-1.json, search-index-2.json...)
       while (true) {
         const fileName = `search-index-${chunkIdx}${extSuffix}`;
-        const url = `${DATABASE_DIR_NAME}/${fileName}?t=` + Date.now();
+        const chunkTime = (info && info.chunkTimestamps && info.chunkTimestamps[chunkIdx]) || Date.now();
+        const url = `${DATABASE_DIR_NAME}/${fileName}?t=${chunkTime}`;
         let data = await CacheManager.get(url);
         if (!data) {
           const res = await fetch(url);
@@ -958,6 +952,37 @@ async function extractSections(f) {
 }
 async function getBuffer(f) { if (f.fileObj) return f.fileObj.arrayBuffer(); const r = await fetch(f.serverPath); if (!r.ok) throw new Error('HTTP ' + r.status); return r.arrayBuffer(); }
 async function getText(f) { if (f.fileObj) return f.fileObj.text(); const r = await fetch(f.serverPath); return r.text(); }
+// Helper to split merged address and name
+function splitAddressAndName(text) {
+  const tokens = text.split(/\s+/).filter(t => t.trim().length > 0);
+  if (tokens.length < 2) return { address: text, name: "" };
+
+  const isNameToken = (t) => !/[\d/]/.test(t);
+
+  let splitIdx = -1;
+  for (let i = 0; i < tokens.length; i++) {
+    let allSubsequentAreName = true;
+    for (let j = i; j < tokens.length; j++) {
+      if (!isNameToken(tokens[j])) {
+        allSubsequentAreName = false;
+        break;
+      }
+    }
+    if (allSubsequentAreName) {
+      splitIdx = i;
+      break;
+    }
+  }
+
+  if (splitIdx > 0 && splitIdx < tokens.length) {
+    const address = tokens.slice(0, splitIdx).join(" ");
+    const name = tokens.slice(splitIdx).join(" ");
+    return { address, name };
+  }
+
+  return { address: text, name: "" };
+}
+
 async function extractPDF(f) {
   const pdf = await pdfjsLib.getDocument({ data: await getBuffer(f) }).promise;
   const s = [];
@@ -1006,6 +1031,55 @@ async function extractPDF(f) {
         lastX = x + (it.width || 0); lastCol = colIdx;
       });
       return rowCells;
+    });
+
+    // Post-process structuredRows to split merged Address & Elector Name
+    let electorNameColIdx = -1;
+    let houseNoColIdx = -1;
+    for (let rIdx = 0; rIdx < Math.min(10, structuredRows.length); rIdx++) {
+      const row = structuredRows[rIdx];
+      for (let cIdx = 0; cIdx < row.length; cIdx++) {
+        const cellText = (row[cIdx] || "").trim().toLowerCase();
+        if ((cellText.includes("elector") || cellText.includes("name")) && !cellText.includes("relation")) {
+          electorNameColIdx = cIdx;
+        }
+        if (cellText.includes("house") || cellText.includes("addr") || cellText.includes("section")) {
+          houseNoColIdx = cIdx;
+        }
+      }
+      if (electorNameColIdx !== -1 && houseNoColIdx !== -1) break;
+    }
+
+    structuredRows.forEach((row) => {
+      const rowText = row.join(" ").toLowerCase();
+      if (rowText.includes("elector") || rowText.includes("constituency") || rowText.includes("relation") || rowText.includes("epic")) {
+        return; 
+      }
+
+      for (let cIdx = 0; cIdx < row.length; cIdx++) {
+        let val = (row[cIdx] || "").trim();
+        if (!val) continue;
+
+        const splitResult = splitAddressAndName(val);
+        if (splitResult.name) {
+          row[cIdx] = splitResult.address;
+
+          let targetCol = electorNameColIdx;
+          if (targetCol === -1 || targetCol === cIdx) {
+            for (let j = cIdx + 1; j < row.length; j++) {
+              if ((row[j] || "").trim() === "") {
+                targetCol = j;
+                break;
+              }
+            }
+          }
+          if (targetCol !== -1 && targetCol !== cIdx) {
+            row[targetCol] = row[targetCol] ? (row[targetCol] + " " + splitResult.name) : splitResult.name;
+          } else {
+            row.push(splitResult.name);
+          }
+        }
+      }
     });
 
     s.push({ location: `Page ${p}`, text: structuredRows.map(r => r.join(" \t ")).join("\n"), type: 'table', data: structuredRows });

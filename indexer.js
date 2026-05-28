@@ -5,11 +5,19 @@ const mammoth = require('mammoth');
 const XLSX = require('xlsx');
 const JSZip = require('jszip');
 const zlib = require('zlib');
+const crypto = require('crypto');
+const { Worker, isMainThread, parentPort } = require('worker_threads');
+const os = require('os');
 
 // Load configuration from app.js (single source of truth)
 const appJsContent = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
 const DATABASE_DIR_NAME = appJsContent.match(/const\s+DATABASE_DIR_NAME\s*=\s*'([^']+)'/)?.[1] || 'database';
 const COMPRESSED_SEARCH_INDEXES = appJsContent.match(/const\s+COMPRESSED_SEARCH_INDEXES\s*=\s*(true|false)/)?.[1] !== 'false';
+
+// Calculate SHA-256 hash of parser and indexer logic to detect updates
+const indexerCode = fs.readFileSync(__filename, 'utf8');
+const codeHash = crypto.createHash('sha256').update(indexerCode + appJsContent).digest('hex');
+const forceFlag = process.argv.includes('--force');
 
 // Configuration
 const DB_DIR = path.join(__dirname, DATABASE_DIR_NAME);
@@ -41,10 +49,17 @@ async function run() {
   // Load existing index info if it exists for smart-skipping
   const infoPath = path.join(DB_DIR, 'search-index-info.json');
   let oldInfo = null;
+  let forceFullRebuild = forceFlag;
   try {
     if (await fs.pathExists(infoPath)) {
       oldInfo = await fs.readJson(infoPath);
-      console.log('📦 Loaded existing search-index-info.json for smart-skipping.');
+      if (oldInfo.codeHash !== codeHash) {
+        console.log('\n⚠️  [Cache Invalidation] Extraction/detection logic has been modified since the last run.');
+        console.log('⚙️  Forcing a full rebuild to apply updated parsing logic to all files!');
+        forceFullRebuild = true;
+      } else {
+        console.log('📦 Loaded existing search-index-info.json for smart-skipping.');
+      }
     }
   } catch (err) {
     // Ignore error
@@ -99,66 +114,160 @@ async function run() {
     }
     return null;
   }
-
-  let currentChunk = {};
+  const chunkTimestamps = oldInfo?.chunkTimestamps || {};
   let chunkCount = 0;
-  let processedInChunk = 0;
-
   const fileToChunk = {};
   const indexedFiles = [];
   const corruptedFiles = [];
   const skippedFiles = [];
   const ignoredFiles = [];
 
-  for (let i = 0; i < total; i++) {
-    const filePath = targetFiles[i];
-    const relPath = path.relative(__dirname, filePath).replace(/\\/g, '/');
-    const ext = path.extname(filePath).toLowerCase().slice(1);
-    const filename = path.basename(filePath);
+  const numWorkers = Math.max(1, os.cpus().length - 1);
+  console.log(`🧵 Spawning pool of ${numWorkers} parallel extraction workers...`);
+  const workers = [];
+  for (let w = 0; w < numWorkers; w++) {
+    workers.push(new Worker(__filename));
+  }
 
-    if (!SUPPORTED_EXT.includes(ext)) {
-      ignoredFiles.push({ path: relPath, reason: `Unsupported extension: .${ext}` });
-      continue;
-    }
+  const numChunks = Math.ceil(total / CHUNK_SIZE);
+  console.log(`📦 Processing ${total} files in ${numChunks} chunks...`);
 
-    try {
+  let overallProcessed = 0;
+  let dirtyChunksCount = 0;
+
+  for (let chunkIdx = 0; chunkIdx < numChunks; chunkIdx++) {
+    const chunkFiles = targetFiles.slice(chunkIdx * CHUNK_SIZE, (chunkIdx + 1) * CHUNK_SIZE);
+    const filesToExtract = [];
+    const cachedData = {};
+    const chunkResults = {};
+    
+    // 1. Scan and resolve cache hits for this chunk (with live scanning progress display)
+    for (let fileIdx = 0; fileIdx < chunkFiles.length; fileIdx++) {
+      const filePath = chunkFiles[fileIdx];
+      const relPath = path.relative(__dirname, filePath).replace(/\\/g, '/');
+      const ext = path.extname(filePath).toLowerCase().slice(1);
+      const filename = path.basename(filePath);
+
+      const absoluteFileIdx = chunkIdx * CHUNK_SIZE + fileIdx;
+      if (absoluteFileIdx % 100 === 0 || absoluteFileIdx === total - 1) {
+        const msg = `🔍 Scanning cache: [${absoluteFileIdx + 1}/${total}] files checked...`;
+        process.stdout.write('\r' + msg.padEnd(80, ' '));
+      }
+
+      if (!SUPPORTED_EXT.includes(ext)) {
+        ignoredFiles.push({ path: relPath, reason: `Unsupported extension: .${ext}` });
+        overallProcessed++;
+        continue;
+      }
+
       let sections = null;
       let isCached = false;
 
-      if (oldInfo && oldInfo.fileToChunk && oldInfo.fileToChunk[relPath]) {
+      if (!forceFullRebuild && oldInfo && oldInfo.fileToChunk && oldInfo.fileToChunk[relPath]) {
         try {
           const stats = await fs.stat(filePath);
           if (stats.mtimeMs < oldInfo.indexedAt) {
             const cachedSections = await getExistingSections(relPath);
-            // Only reuse cache if there is actually extracted content.
-            // If the cache is empty (due to a previous failed/corrupted attempt or an empty file),
-            // we bypass the cache and re-extract to guarantee complete, robust indexing.
             if (cachedSections && cachedSections.length > 0) {
               sections = cachedSections;
               isCached = true;
-            } else {
-              console.log(`\n🔄 Re-verifying empty or previously failed file to ensure complete coverage: ${relPath}`);
             }
           }
         } catch (e) {
-          // Fall back to extraction
+          // Fall back
         }
       }
 
       if (isCached) {
-        process.stdout.write(`\rIndexing [${i + 1}/${total}]: ${relPath}... (Cached) `);
-        if (sections.length === 0) {
-          skippedFiles.push({ path: relPath, reason: 'Empty text / No content extracted' });
-        } else {
-          indexedFiles.push(relPath);
-        }
+        cachedData[relPath] = sections;
+        indexedFiles.push(relPath);
+        overallProcessed++;
       } else {
-        process.stdout.write(`\rIndexing [${i + 1}/${total}]: ${relPath}... `);
-        sections = await extractSections(filePath, ext);
-        if (sections.length === 0) {
+        filesToExtract.push({ filePath, relPath, ext, filename });
+      }
+    }
+
+    // Print a newline when cache scanning is fully finished
+    if (chunkIdx === numChunks - 1) {
+      const msg = `🔍 Scanning cache: [${total}/${total}] files checked... Done.`;
+      process.stdout.write('\r' + msg.padEnd(80, ' ') + '\n');
+    }
+
+    // 2. Extract cache misses for this chunk using workers in parallel
+    if (filesToExtract.length > 0) {
+      let nextTaskIndex = 0;
+      let activeWorkersCountForChunk = numWorkers;
+      let completedTasksForChunk = 0;
+
+      await new Promise((resolve) => {
+        const sendNextTask = (worker) => {
+          if (nextTaskIndex < filesToExtract.length) {
+            const task = filesToExtract[nextTaskIndex];
+            const taskId = nextTaskIndex;
+            nextTaskIndex++;
+            worker.postMessage({ type: 'extract', id: taskId, filePath: task.filePath, ext: task.ext });
+          } else {
+            activeWorkersCountForChunk--;
+            if (activeWorkersCountForChunk === 0) {
+              resolve();
+            }
+          }
+        };
+
+        workers.forEach(worker => {
+          worker.removeAllListeners('message');
+          worker.removeAllListeners('error');
+
+          worker.on('message', (msg) => {
+            if (msg.type === 'success') {
+              const relPath = path.relative(__dirname, msg.filePath).replace(/\\/g, '/');
+              chunkResults[relPath] = msg.sections;
+              indexedFiles.push(relPath);
+              completedTasksForChunk++;
+              overallProcessed++;
+              const progressMsg = `📦 Chunk [${chunkIdx + 1}/${numChunks}] - Extracted [${completedTasksForChunk}/${filesToExtract.length}] - Overall: [${overallProcessed}/${total}] processed...`;
+              process.stdout.write('\r' + progressMsg.padEnd(100, ' '));
+            } else if (msg.type === 'error') {
+              const relPath = path.relative(__dirname, msg.filePath).replace(/\\/g, '/');
+              chunkResults[relPath] = [];
+              corruptedFiles.push({ path: relPath, error: msg.error });
+              completedTasksForChunk++;
+              overallProcessed++;
+              console.error(`\n❌ Error indexing ${relPath}: ${msg.error}`);
+            }
+            sendNextTask(worker);
+          });
+
+          worker.on('error', (err) => {
+            console.error('Worker thread error:', err);
+            activeWorkersCountForChunk--;
+            if (activeWorkersCountForChunk === 0) {
+              resolve();
+            }
+          });
+
+          sendNextTask(worker);
+        });
+      });
+    }
+
+    // 3. Assemble and conditionally save the chunk immediately to disk to free memory (Option 3: Dirty-Chunk Writing)
+    const currentChunk = {};
+    for (const filePath of chunkFiles) {
+      const relPath = path.relative(__dirname, filePath).replace(/\\/g, '/');
+      const ext = path.extname(filePath).toLowerCase().slice(1);
+      const filename = path.basename(filePath);
+
+      if (!SUPPORTED_EXT.includes(ext)) continue;
+
+      let sections = cachedData[relPath] || chunkResults[relPath];
+      if (sections === undefined) {
+        sections = [];
+      }
+
+      if (sections.length === 0 && !corruptedFiles.some(f => f.path === relPath)) {
+        if (!skippedFiles.some(f => f.path === relPath)) {
           skippedFiles.push({ path: relPath, reason: 'Empty text / No content extracted' });
-        } else {
-          indexedFiles.push(relPath);
         }
       }
 
@@ -166,47 +275,43 @@ async function run() {
         fileInfo: { name: filename, serverPath: relPath },
         sections: sections
       };
-      fileToChunk[relPath] = chunkCount + 1;
-      processedInChunk++;
+      fileToChunk[relPath] = chunkIdx + 1;
+    }
 
-      // Save chunk and reset if limit reached
-      if (processedInChunk >= CHUNK_SIZE) {
-        await saveChunk(currentChunk, chunkCount);
-        currentChunk = {};
-        chunkCount++;
-        processedInChunk = 0;
-      }
-    } catch (e) {
-      console.error(`\n❌ Error indexing ${relPath}: ${e.message}`);
-      corruptedFiles.push({ path: relPath, error: e.message });
+    // Detect if this chunk is "dirty" (requires writing/overwriting to disk)
+    const suffix = COMPRESSED_SEARCH_INDEXES ? '.json.gz' : '.json';
+    const chunkFileName = `search-index-${chunkIdx + 1}${suffix}`;
+    const chunkPath = path.join(DB_DIR, chunkFileName);
+    const chunkExists = await fs.pathExists(chunkPath);
+    const isDirty = forceFullRebuild || filesToExtract.length > 0 || !chunkExists;
 
-      currentChunk[relPath] = {
-        fileInfo: { name: filename, serverPath: relPath },
-        sections: []
-      };
-      fileToChunk[relPath] = chunkCount + 1;
-      processedInChunk++;
-      if (processedInChunk >= CHUNK_SIZE) {
-        await saveChunk(currentChunk, chunkCount);
-        currentChunk = {};
-        chunkCount++;
-        processedInChunk = 0;
+    if (isDirty) {
+      await saveChunk(currentChunk, chunkIdx);
+      dirtyChunksCount++;
+      chunkTimestamps[chunkIdx + 1] = Date.now();
+    } else {
+      if (!chunkTimestamps[chunkIdx + 1]) {
+        chunkTimestamps[chunkIdx + 1] = oldInfo?.indexedAt || Date.now();
       }
     }
-  }
-
-  // Save final chunk
-  if (Object.keys(currentChunk).length > 0) {
-    await saveChunk(currentChunk, chunkCount);
     chunkCount++;
   }
+
+  // 4. Terminate worker threads cleanly
+  workers.forEach(worker => {
+    worker.postMessage({ type: 'exit' });
+  });
+
+  console.log(`\n💾 Saved ${dirtyChunksCount} dirty index chunk(s), skipped ${numChunks - dirtyChunksCount} unchanged chunk(s) on disk.`);
 
   // Save index metadata for parallel loading
   const infoObj = {
     totalChunks: chunkCount,
     indexedAt: Date.now(),
+    codeHash: codeHash,
     fileToChunk,
-    compressed: COMPRESSED_SEARCH_INDEXES
+    compressed: COMPRESSED_SEARCH_INDEXES,
+    chunkTimestamps
   };
   const infoStr = JSON.stringify(infoObj, null, 2);
   const infoLines = infoStr.split('\n');
@@ -226,12 +331,18 @@ async function run() {
   }
   await fs.writeFile(infoPath, formattedInfoLines.join('\n'), 'utf8');
 
+  const successfullyIndexedCount = indexedFiles.filter(path => 
+    !skippedFiles.some(f => f.path === path) &&
+    !corruptedFiles.some(f => f.path === path) &&
+    !ignoredFiles.some(f => f.path === path)
+  ).length;
+
   // Save detailed indexing report
   const reportPath = path.join(DB_DIR, 'search-index-report.json');
   await fs.outputJson(reportPath, {
     summary: {
       totalFoundInDirectory: total,
-      successfullyIndexed: indexedFiles.length,
+      successfullyIndexed: successfullyIndexedCount,
       skippedEmpty: skippedFiles.length,
       corruptedFailed: corruptedFiles.length,
       ignoredUnsupported: ignoredFiles.length
@@ -245,7 +356,7 @@ async function run() {
   console.log(`✅ Indexing complete! Saved ${chunkCount} index chunks.`);
   console.log(`============================================`);
   console.log(`📊 INDEXING SUMMARY:`);
-  console.log(`   - Successfully Indexed      : ${indexedFiles.length} file(s)`);
+  console.log(`   - Successfully Indexed      : ${successfullyIndexedCount} file(s)`);
   console.log(`   - Ignored (Unsupported)     : ${ignoredFiles.length} file(s)`);
   console.log(`   - Skipped (Empty/No text)   : ${skippedFiles.length} file(s)`);
   console.log(`   - Corrupted/Failed          : ${corruptedFiles.length} file(s)`);
@@ -272,23 +383,22 @@ async function run() {
     });
   }
 
-  // Clean up old chunks and rename new chunks
+  // Clean up any leftover old chunks from previous larger runs
   console.log('🔄 Finalizing search index files...');
   const allFilesInDb = await fs.readdir(DB_DIR);
-  
-  // 1. Delete old chunks
+  let deletedLeftovers = 0;
   for (const file of allFilesInDb) {
-    if (file.startsWith('search-index-') && !file.startsWith('search-index-temp-') && file !== 'search-index-info.json' && file !== 'search-index-report.json') {
-      await fs.remove(path.join(DB_DIR, file));
+    const match = file.match(/^search-index-(\d+)(?:\.json|\.json\.gz)$/);
+    if (match) {
+      const idx = parseInt(match[1], 10);
+      if (idx > chunkCount) {
+        await fs.remove(path.join(DB_DIR, file));
+        deletedLeftovers++;
+      }
     }
   }
-  
-  // 2. Rename temp chunks to final names
-  for (let idx = 0; idx < chunkCount; idx++) {
-    const suffix = COMPRESSED_SEARCH_INDEXES ? '.json.gz' : '.json';
-    const tempName = `search-index-temp-${idx + 1}${suffix}`;
-    const finalName = `search-index-${idx + 1}${suffix}`;
-    await fs.move(path.join(DB_DIR, tempName), path.join(DB_DIR, finalName), { overwrite: true });
+  if (deletedLeftovers > 0) {
+    console.log(`🧹 Cleaned up ${deletedLeftovers} leftover chunk file(s) from a previous larger database run.`);
   }
 
   console.log(`\n📂 Full indexing report saved to: database/search-index-report.json`);
@@ -297,7 +407,7 @@ async function run() {
 
 async function saveChunk(data, index) {
   const suffix = COMPRESSED_SEARCH_INDEXES ? '.json.gz' : '.json';
-  const fileName = `search-index-temp-${index + 1}${suffix}`; // save as temp first to avoid lock/overwrite collision
+  const fileName = `search-index-${index + 1}${suffix}`;
   const fullPath = path.join(DB_DIR, fileName);
   if (COMPRESSED_SEARCH_INDEXES) {
     const jsonStr = JSON.stringify(data);
@@ -405,6 +515,37 @@ async function extractSections(filePath, ext) {
   throw new Error(`File is completely unreadable or empty.`);
 }
 
+// Helper to split merged address and name
+function splitAddressAndName(text) {
+  const tokens = text.split(/\s+/).filter(t => t.trim().length > 0);
+  if (tokens.length < 2) return { address: text, name: "" };
+
+  const isNameToken = (t) => !/[\d/]/.test(t);
+
+  let splitIdx = -1;
+  for (let i = 0; i < tokens.length; i++) {
+    let allSubsequentAreName = true;
+    for (let j = i; j < tokens.length; j++) {
+      if (!isNameToken(tokens[j])) {
+        allSubsequentAreName = false;
+        break;
+      }
+    }
+    if (allSubsequentAreName) {
+      splitIdx = i;
+      break;
+    }
+  }
+
+  if (splitIdx > 0 && splitIdx < tokens.length) {
+    const address = tokens.slice(0, splitIdx).join(" ");
+    const name = tokens.slice(splitIdx).join(" ");
+    return { address, name };
+  }
+
+  return { address: text, name: "" };
+}
+
 async function extractPDF(buffer) {
   const uint8Array = new Uint8Array(buffer);
   const loadingTask = pdfjs.getDocument({ data: uint8Array, useSystemFonts: true, disableFontFace: true });
@@ -446,6 +587,56 @@ async function extractPDF(buffer) {
       });
       return rowCells;
     });
+
+    // Post-process structuredRows to split merged Address & Elector Name
+    let electorNameColIdx = -1;
+    let houseNoColIdx = -1;
+    for (let rIdx = 0; rIdx < Math.min(10, structuredRows.length); rIdx++) {
+      const row = structuredRows[rIdx];
+      for (let cIdx = 0; cIdx < row.length; cIdx++) {
+        const cellText = (row[cIdx] || "").trim().toLowerCase();
+        if ((cellText.includes("elector") || cellText.includes("name")) && !cellText.includes("relation")) {
+          electorNameColIdx = cIdx;
+        }
+        if (cellText.includes("house") || cellText.includes("addr") || cellText.includes("section")) {
+          houseNoColIdx = cIdx;
+        }
+      }
+      if (electorNameColIdx !== -1 && houseNoColIdx !== -1) break;
+    }
+
+    structuredRows.forEach((row) => {
+      const rowText = row.join(" ").toLowerCase();
+      if (rowText.includes("elector") || rowText.includes("constituency") || rowText.includes("relation") || rowText.includes("epic")) {
+        return; 
+      }
+
+      for (let cIdx = 0; cIdx < row.length; cIdx++) {
+        let val = (row[cIdx] || "").trim();
+        if (!val) continue;
+
+        const splitResult = splitAddressAndName(val);
+        if (splitResult.name) {
+          row[cIdx] = splitResult.address;
+
+          let targetCol = electorNameColIdx;
+          if (targetCol === -1 || targetCol === cIdx) {
+            for (let j = cIdx + 1; j < row.length; j++) {
+              if ((row[j] || "").trim() === "") {
+                targetCol = j;
+                break;
+              }
+            }
+          }
+          if (targetCol !== -1 && targetCol !== cIdx) {
+            row[targetCol] = row[targetCol] ? (row[targetCol] + " " + splitResult.name) : splitResult.name;
+          } else {
+            row.push(splitResult.name);
+          }
+        }
+      }
+    });
+
     s.push({ location: `Page ${p}`, text: structuredRows.map(r => r.join(" \t ")).join("\n"), type: 'table', data: structuredRows });
   }
   return s;
@@ -464,4 +655,21 @@ function chunkText(text, size, pfx, byLines = false) {
 
 function xmlToText(xml) { return xml.replace(/<[^>]+>/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/\s+/g, ' ').trim(); }
 
-run().catch(console.error);
+if (!isMainThread) {
+  // Worker Thread task listener
+  parentPort.on('message', async (task) => {
+    if (task.type === 'exit') {
+      process.exit(0);
+    }
+    if (task.type === 'extract') {
+      try {
+        const sections = await extractSections(task.filePath, task.ext);
+        parentPort.postMessage({ type: 'success', filePath: task.filePath, sections });
+      } catch (err) {
+        parentPort.postMessage({ type: 'error', filePath: task.filePath, error: err.message });
+      }
+    }
+  });
+} else {
+  run().catch(console.error);
+}
