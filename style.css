@@ -735,7 +735,8 @@ body {
   background: rgba(0,0,0,0.2);
 }
 .match-table {
-  width: 100%;
+  width: max-content;
+  min-width: 100%;
   border-collapse: collapse;
   font-size: 13px;
   color: var(--text-muted);
@@ -745,9 +746,7 @@ body {
   border: 1px solid var(--border);
   text-align: left;
   white-space: nowrap;
-  max-width: 400px;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  max-width: none;
 }
 /* ── Last column inner padding ───────────────────────────────────────────────
    📦 TO ADD MORE SPACE INSIDE the last column on the right → increase padding-right
