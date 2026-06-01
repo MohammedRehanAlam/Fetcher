@@ -6,7 +6,7 @@ const AUTO_LOAD_DB = false; // Set to true to automatically load the database on
 const SNIPPET_RADIUS = 100;
 const ENABLE_INDEXING = true;
 const COMPRESSED_SEARCH_INDEXES = true; // Set to true to use compressed search indexes (.json.gz) by default
-const MIN_FOLDER_DEPTH = 1; // Developer can change this to 1, 3, etc.
+const MIN_FOLDER_DEPTH = 2; // Developer can change this to 1, 3, etc.
 
 if (typeof pdfjsLib !== 'undefined')
   pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
@@ -1399,9 +1399,7 @@ function buildCard({ fileInfo, matches }, terms, index) {
           let count = 0;
           val = val.replace(/ +/g, (match) => {
             count++;
-            if (count <= 1) return " \u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0 ";
-            if (count <= 2) return " \u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0 ";
-            if (count <= 3) return " \u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0 ";
+            if (count <= 10) return " \u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0 ";
             return match;
           });
         }
